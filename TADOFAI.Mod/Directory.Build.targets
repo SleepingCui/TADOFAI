@@ -1,0 +1,20 @@
+<Project>
+
+  <!--
+    引用检查：按各工程声明的需求给出可执行的错误提示，而不是让 MSBuild 抛裸的解析失败。
+      NeedsGameAssemblies  需要游戏程序集与 Unity 运行时
+      NeedsHarmony         需要 HarmonyLib
+      NeedsUmm             需要 Unity Mod Manager
+  -->
+  <Target Name="VerifyReferences" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="'$(NeedsGameAssemblies)' == 'true' and !Exists('$(GameAssembly)')"
+           Text="缺少 $(GameAssembly)。请把 ADOFAI 的 Managed 目录内容放到 libs\，或用 -p:LibsDir= 指定目录。" />
+    <Error Condition="'$(NeedsGameAssemblies)' == 'true' and !Exists('$(LibsDir)\RDTools.dll')"
+           Text="缺少 $(LibsDir)\RDTools.dll（游戏程序集依赖）。" />
+    <Error Condition="'$(NeedsHarmony)' == 'true' and !Exists('$(UmmDir)\0Harmony.dll')"
+           Text="缺少 $(UmmDir)\0Harmony.dll。请把 Unity Mod Manager 目录放到 libs\UnityModManager\。" />
+    <Error Condition="'$(NeedsUmm)' == 'true' and !Exists('$(UmmDir)\UnityModManager.dll')"
+           Text="缺少 $(UmmDir)\UnityModManager.dll。请把 Unity Mod Manager 目录放到 libs\UnityModManager\。" />
+  </Target>
+
+</Project>

@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    TADOFAI.Mod —— 共享游戏逻辑。
+
+    不依赖任何 Mod 加载器：入口通过 IModLoader 抽象，由 TADOFAI.Loader.* 适配。
+    公共配置（TargetFramework / libs 路径 / AssemblySearchPaths）见 ..\Directory.Build.props。
+  -->
+
+  <PropertyGroup>
+    <AssemblyName>TADOFAI.Mod</AssemblyName>
+    <RootNamespace>TADOFAI.Mod</RootNamespace>
+    <Version>0.1.0</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <FileVersion>0.1.0.0</FileVersion>
+    <NeedsGameAssemblies>true</NeedsGameAssemblies>
+    <NeedsHarmony>true</NeedsHarmony>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 游戏本体与 Unity 运行时。Private=false：运行期由游戏自己提供，不复制进输出 -->
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(GameAssembly)</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="RDTools">
+      <HintPath>$(LibsDir)\RDTools.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp-firstpass">
+      <HintPath>$(LibsDir)\Assembly-CSharp-firstpass.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="$(LibsDir)\UnityEngine*.dll">
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Harmony（Patch 用），由 UMM 目录提供 -->
+    <Reference Include="0Harmony">
+      <HintPath>$(UmmDir)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

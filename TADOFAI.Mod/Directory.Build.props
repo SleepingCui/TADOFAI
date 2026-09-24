@@ -1,0 +1,38 @@
+<Project>
+
+  <!--
+    TADOFAI.Mod 解决方案公共配置（自动作用于 TADOFAI/ 和 TADOFAI.Loader.UMM/）。
+
+    依赖 libs/ 目录（相对解决方案根，可用 -p:LibsDir= 覆盖）：
+      libs\                     ADOFAI 的 "A Dance of Fire and Ice_Data\Managed" 内容
+      libs\UnityModManager\     Unity Mod Manager 目录（UnityModManager.dll + 0Harmony.dll）
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+    <DebugType>portable</DebugType>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <LibsDir Condition="'$(LibsDir)' == '' and '$(TADOFAI_LIBS_DIR)' != ''">$(TADOFAI_LIBS_DIR)</LibsDir>
+    <LibsDir Condition="'$(LibsDir)' == ''">$(MSBuildThisFileDirectory)libs</LibsDir>
+    <UmmDir>$(LibsDir)\UnityModManager</UmmDir>
+
+    <!-- 默认对齐 r340；换游戏版本时 -p:GameAssembly=libs\Assembly-CSharp.dll -->
+    <GameAssembly Condition="'$(GameAssembly)' == ''">$(LibsDir)\Assembly-CSharp340.dll</GameAssembly>
+
+    <!--
+      libs/ 里有 Mono 版 System.dll / mscorlib.dll，会被当成候选程序集抢占框架引用
+      （表现为 CS7069 ValueTask）。把目标框架目录排到最前，框架程序集始终取 .NET Framework 的。
+    -->
+    <AssemblySearchPaths>{TargetFrameworkDirectory};{HintPathFromItem};{CandidateAssemblyFiles};{RawFileName};{GAC}</AssemblySearchPaths>
+  </PropertyGroup>
+
+</Project>

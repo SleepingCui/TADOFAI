@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tadofai.local/schemas/state-v1.schema.json",
+  "title": "TADOFAI state message v1",
+  "description": "状态流：只保存最新值，由 Core 按 server.stateRate 广播（默认 60Hz）。字段一律 camelCase。",
+  "type": "object",
+  "required": ["type", "version", "timestamp", "data"],
+  "properties": {
+    "type": { "const": "state" },
+    "version": { "const": 1 },
+    "timestamp": { "type": "number", "description": "Core 发送时刻（epoch 秒）" },
+    "data": { "$ref": "#/$defs/gameState" }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "gameState": {
+      "type": "object",
+      "properties": {
+        "connected": { "type": "boolean", "description": "Mod 是否在线" },
+        "stale": { "type": "boolean", "description": "Mod 已断开，这是最后一份状态" },
+        "gameState": { "type": "string", "enum": ["idle", "playing", "cleared"] },
+        "droppedEvents": { "type": "integer", "minimum": 0, "description": "Mod 侧队列满丢弃的事件数" },
+        "auto": { "type": "boolean" },
+        "practice": { "type": "boolean" },
+        "noFail": { "type": "boolean" },
+        "map": { "$ref": "#/$defs/map" },
+        "play": { "$ref": "#/$defs/play" },
+        "playerSeq": {
+          "type": "array",
+          "description": "Coop 时每个玩家当前所在 Floor 的 seqID，下标即 player",
+          "items": { "type": "integer", "minimum": 0 },
+          "maxItems": 16
+        },
+        "updatedAt": {
+          "type": ["number", "null"],
+          "description": "Core 收到该状态的时刻（epoch 秒）；Mod 断开后不再变化"
+        }
+      },
+      "additionalProperties": true
+    },
+    "map": {
+      "type": "object",
+      "properties": {
+        "songName": { "type": "string", "maxLength": 512 },
+        "songAuthor": { "type": "string", "maxLength": 512 },
+        "difficulty": { "type": "integer", "minimum": 0, "maximum": 99 }
+      },
+      "additionalProperties": true
+    },
+    "play": {
+      "type": "object",
+      "properties": {
+        "seq": { "type": "integer", "minimum": 0 },
+        "progress": { "type": "number", "minimum": 0, "maximum": 1 },
+        "combo": { "type": "integer", "minimum": 0 },
+        "maxCombo": { "type": "integer", "minimum": 0 },
+        "accuracy": { "type": "number", "minimum": 0, "maximum": 1 },
+        "xAccuracy": { "type": "number", "minimum": 0, "maximum": 1 },
+        "bpm": { "type": "number", "minimum": 0 },
+        "timingMs": { "type": "number", "minimum": -1000, "maximum": 1000 },
+        "misses": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    }
+  }
+}

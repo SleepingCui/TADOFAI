@@ -1,0 +1,14 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 37125,
+    "stateRate": 60
+  },
+  "plugins": {
+    "directory": "plugins",
+    "autoReload": true
+  },
+  "logging": {
+    "level": "INFO"
+  }
+}

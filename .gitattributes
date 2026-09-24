@@ -1,0 +1,29 @@
+# 默认按文本处理，仓库内统一 LF；下面的例外另行指定
+* text=auto eol=lf
+
+# Windows 批处理必须保持 CRLF，否则 cmd.exe 解析容易出问题
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制：不要做行尾转换与 diff
+*.dll binary
+*.pdb binary
+*.zip binary
+*.exe binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.ttf binary
+*.woff2 binary
+
+# 文本资源明确一下，便于 diff 与统计
+*.py   text
+*.cs   text
+*.csproj text
+*.json text
+*.md   text
+*.html text
+*.css  text
+*.js   text
+*.svg  text
+*.xml  text

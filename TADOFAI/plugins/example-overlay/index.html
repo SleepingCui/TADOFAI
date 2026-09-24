@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Example Overlay</title>
+<!-- OBS 浏览器源用：背景全透明，只有展示内容，没有任何可交互控件 -->
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="offline">
+
+<!-- 顶部环境光晕 -->
+<div class="ambient" id="ambient"></div>
+
+<div class="overlay" id="overlay">
+
+  <div class="panel">
+    <!-- 顶部扫光线 -->
+    <div class="panel-sheen"></div>
+    <!-- 四角装饰 -->
+    <span class="corner corner-tl"></span>
+    <span class="corner corner-tr"></span>
+    <span class="corner corner-bl"></span>
+    <span class="corner corner-br"></span>
+
+    <div class="panel-main">
+      <div class="combo-box">
+        <div class="combo-ring"></div>
+        <div class="combo-label">COMBO</div>
+        <div class="combo-value" id="combo">0</div>
+      </div>
+
+      <div class="song-box">
+        <div class="song" id="song">未载入曲目</div>
+        <div class="tags">
+          <span class="tag tag-state" id="game-state">空闲</span>
+          <span class="tag" id="difficulty">--</span>
+          <span class="tag" id="progress-text">0.0%</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="bar">
+      <div class="bar-glow"></div>
+      <div class="bar-fill" id="progress-bar">
+        <div class="bar-sheen"></div>
+      </div>
+      <div class="bar-head" id="bar-head"></div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><span class="stat-k">准确率</span><span class="stat-v" id="accuracy">--</span></div>
+      <div class="stat"><span class="stat-k">X-准确率</span><span class="stat-v" id="xaccuracy">--</span></div>
+      <div class="stat"><span class="stat-k">BPM</span><span class="stat-v" id="bpm">--</span></div>
+      <div class="stat"><span class="stat-k">TIMING</span><span class="stat-v" id="timing">--</span></div>
+      <div class="stat"><span class="stat-k">MISS</span><span class="stat-v" id="misses">0</span></div>
+    </div>
+  </div>
+
+  <!-- 命中提示 -->
+  <div class="hit" id="hit">
+    <div class="hit-echo" id="hit-echo"></div>
+    <span class="hit-judgement" id="hit-judgement">READY</span>
+    <span class="hit-timing" id="hit-timing"></span>
+  </div>
+
+  <!-- Combo 里程碑爆发 -->
+  <div class="milestone" id="milestone"><span id="milestone-text"></span></div>
+
+  <!-- 结算横幅 -->
+  <div class="banner" id="banner">
+    <div class="banner-sheen"></div>
+    <span id="banner-text">本局结束</span>
+  </div>
+
+</div>
+
+<!-- SDK 用绝对路径：插件页面挂在 /overlay/example-overlay/ -->
+<script src="/sdk/protocol.js"></script>
+<script src="/sdk/tadofai-client.js"></script>
+<script src="main.js"></script>
+</body>
+</html>

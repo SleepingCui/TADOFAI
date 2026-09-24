@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TADOFAI Core 管理面板</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <!-- 内联 SVG 图标：轨道 + 行星 -->
+    <svg class="logo" viewBox="0 0 64 64" width="28" height="28" aria-hidden="true">
+      <circle cx="32" cy="32" r="25" fill="none" stroke="#3ea8ff" stroke-width="5"/>
+      <circle cx="32" cy="32" r="10" fill="#9fd8ff"/>
+      <circle cx="32" cy="7" r="5" fill="#7ef0d0"/>
+    </svg>
+    <h1>TADOFAI Core</h1>
+    <span class="muted" id="core-state">正在连接…</span>
+  </div>
+  <div class="topbar-right">
+    <span class="pill" id="mod-pill">Mod 状态未知</span>
+    <span class="muted" id="last-update">尚未刷新</span>
+  </div>
+</header>
+
+<div class="banner" id="top-error" hidden></div>
+
+<main>
+
+  <!-- 服务状态 -->
+  <section class="card">
+    <div class="card-head">
+      <h2>服务状态</h2>
+      <span class="muted">GET /api/health · 每 1.5 秒</span>
+    </div>
+    <div class="grid">
+      <div class="field"><span class="k">核心</span><span class="v num" id="h-core">--</span></div>
+      <div class="field"><span class="k">Mod 连接</span><span class="v num" id="h-mod">--</span></div>
+      <div class="field"><span class="k">客户端数</span><span class="v num" id="h-clients">--</span></div>
+      <div class="field"><span class="k">事件队列</span><span class="v num" id="h-queue">--</span></div>
+      <div class="field"><span class="k">丢弃事件</span><span class="v num" id="h-dropped">--</span></div>
+      <div class="field"><span class="k">协议版本</span><span class="v num" id="h-proto">--</span></div>
+    </div>
+  </section>
+
+  <!-- 实时状态 -->
+  <section class="card">
+    <div class="card-head">
+      <h2>实时状态</h2>
+      <span class="muted">GET /api/state · 每 1.5 秒</span>
+    </div>
+    <div class="grid">
+      <div class="field"><span class="k">游戏状态</span><span class="v num" id="s-game">--</span></div>
+      <div class="field wide"><span class="k">曲名</span><span class="v" id="s-song">--</span></div>
+      <div class="field"><span class="k">序号 seq</span><span class="v num" id="s-seq">--</span></div>
+      <div class="field"><span class="k">进度</span><span class="v num" id="s-progress">--</span></div>
+      <div class="field"><span class="k">Combo</span><span class="v num" id="s-combo">--</span></div>
+      <div class="field"><span class="k">准确率</span><span class="v num" id="s-acc">--</span></div>
+      <div class="field"><span class="k">X-准确率</span><span class="v num" id="s-xacc">--</span></div>
+      <div class="field"><span class="k">BPM</span><span class="v num" id="s-bpm">--</span></div>
+      <div class="field"><span class="k">Timing</span><span class="v num" id="s-timing">--</span></div>
+      <div class="field"><span class="k">Miss</span><span class="v num" id="s-misses">--</span></div>
+    </div>
+    <div class="bar"><div class="bar-fill" id="s-bar"></div></div>
+  </section>
+
+  <!-- 插件列表 -->
+  <section class="card">
+    <div class="card-head">
+      <h2>插件</h2>
+      <div class="head-actions">
+        <span class="muted" id="plugins-updated">--</span>
+        <button type="button" class="btn" id="plugins-refresh">刷新</button>
+      </div>
+    </div>
+    <div class="plugin-list" id="plugin-list">
+      <div class="empty">正在加载插件列表…</div>
+    </div>
+  </section>
+
+  <!-- 配置 -->
+  <section class="card">
+    <div class="card-head">
+      <h2>配置</h2>
+      <div class="head-actions">
+        <span class="muted" id="config-source">GET /api/config</span>
+        <button type="button" class="btn" id="config-reload">重新载入</button>
+      </div>
+    </div>
+
+    <form id="config-form" autocomplete="off">
+      <fieldset>
+        <legend>服务端</legend>
+        <div class="form-grid">
+          <label class="form-field">
+            <span>监听地址 server.host</span>
+            <input type="text" id="cfg-host" placeholder="127.0.0.1">
+          </label>
+          <label class="form-field">
+            <span>端口 server.port</span>
+            <input type="number" id="cfg-port" min="1" max="65535" step="1" placeholder="37125">
+          </label>
+          <label class="form-field">
+            <span>状态推送频率 server.stateRate (Hz)</span>
+            <input type="number" id="cfg-rate" min="1" max="240" step="1" placeholder="60">
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>插件</legend>
+        <div class="form-grid">
+          <label class="form-field">
+            <span>插件目录 plugins.directory</span>
+            <input type="text" id="cfg-dir" placeholder="plugins">
+          </label>
+          <label class="form-field check">
+            <input type="checkbox" id="cfg-reload">
+            <span>自动重载 plugins.autoReload</span>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>日志</legend>
+        <div class="form-grid">
+          <label class="form-field">
+            <span>级别 logging.level</span>
+            <select id="cfg-level">
+              <option value="DEBUG">DEBUG</option>
+              <option value="INFO">INFO</option>
+              <option value="WARNING">WARNING</option>
+              <option value="ERROR">ERROR</option>
+              <option value="CRITICAL">CRITICAL</option>
+            </select>
+          </label>
+        </div>
+      </fieldset>
+
+      <div class="form-foot">
+        <button type="submit" class="btn primary" id="config-save">保存配置</button>
+        <span class="form-msg" id="config-msg"></span>
+      </div>
+    </form>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <span class="muted">TADOFAI Core 管理面板 · 纯静态页面，无外部依赖</span>
+</footer>
+
+<script src="/sdk/protocol.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

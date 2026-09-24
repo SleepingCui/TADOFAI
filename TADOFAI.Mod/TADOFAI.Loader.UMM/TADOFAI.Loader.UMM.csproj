@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    TADOFAI.Loader.UMM —— Unity Mod Manager 入口适配。
+
+    只做三件事：把 UMM 的日志 / OnToggle / OnUpdate 转成 IModLoader、加载配置、调用 Main。
+    游戏逻辑全部在 TADOFAI.Mod 里，本工程不引用任何游戏类型。
+    公共配置见 ..\Directory.Build.props。
+
+    输出目录同时包含：
+      TADOFAI.Loader.UMM.dll   UMM 加载的入口程序集
+      TADOFAI.Mod.dll          共享逻辑（ProjectReference 自动复制）
+      info.json                UMM 清单（随生成复制）
+    整个 bin\$(Configuration)\ 直接丢进 <游戏目录>\Mods\TADOFAI.Mod\ 即可。
+  -->
+
+  <PropertyGroup>
+    <AssemblyName>TADOFAI.Loader.UMM</AssemblyName>
+    <RootNamespace>TADOFAI.Loader.UMM</RootNamespace>
+    <Version>0.1.0</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <FileVersion>0.1.0.0</FileVersion>
+    <NeedsUmm>true</NeedsUmm>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="UnityModManager">
+      <HintPath>$(UmmDir)\UnityModManager.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 共享逻辑；UMM 会从 Mod 目录解析依赖，所以需要复制到输出 -->
+    <ProjectReference Include="..\TADOFAI\TADOFAI.Mod.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- UMM 清单必须与入口 DLL 同目录 -->
+    <None Include="info.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

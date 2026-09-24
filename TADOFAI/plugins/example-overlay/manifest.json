@@ -1,0 +1,10 @@
+{
+  "id": "example-overlay",
+  "name": "Example Overlay",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "entry": "index.html",
+  "type": "overlay",
+  "permissions": ["state.read", "events.read"],
+  "defaultSize": {"width": 1920, "height": 1080}
+}

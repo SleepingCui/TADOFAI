@@ -1,0 +1,11 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/TADOFAI/">
+    <Project Path="TADOFAI.Loader.UMM/TADOFAI.Loader.UMM.csproj" />
+    <Project Path="TADOFAI/TADOFAI.Mod.csproj" />
+  </Folder>
+</Solution>

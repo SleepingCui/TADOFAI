@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tadofai.local/schemas/event-v1.schema.json",
+  "title": "TADOFAI handshake / event message v1",
+  "description": "Mod 上行与 Core 转发给插件的事件流消息。逐条发送，低延迟优先；id 单调递增，用于检测丢失或重复。状态帧见 state-v1.schema.json。字段一律 camelCase。",
+  "type": "object",
+  "required": ["type", "version", "timestamp", "data"],
+  "properties": {
+    "type": {
+      "enum": ["hello", "hit", "game.start", "game.end", "map.changed", "state.changed", "death", "checkpoint"]
+    },
+    "version": { "const": 1 },
+    "timestamp": { "type": "number" },
+    "id": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Mod 侧单调递增的事件号；state 消息没有 id"
+    },
+    "data": { "type": "object" }
+  },
+  "additionalProperties": true,
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "hello" } } },
+      "then": { "properties": { "data": { "$ref": "#/$defs/hello" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "hit" } } },
+      "then": { "properties": { "data": { "$ref": "#/$defs/hit" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": { "enum": ["game.start", "game.end", "map.changed", "state.changed", "death", "checkpoint"] }
+        }
+      },
+      "then": { "properties": { "data": { "$ref": "#/$defs/gameEvent" } } }
+    }
+  ],
+  "$defs": {
+    "hello": {
+      "type": "object",
+      "description": "连接后的第一帧，声明客户端身份与能力",
+      "properties": {
+        "client": { "type": "string", "maxLength": 64 },
+        "modVersion": { "type": "string", "maxLength": 64 },
+        "gameVersion": { "type": "string", "maxLength": 64 },
+        "protocolVersion": { "type": "integer", "minimum": 0 },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string" },
+          "maxItems": 32,
+          "examples": [["hit", "timing", "accuracy", "bpm", "progress"]]
+        }
+      },
+      "additionalProperties": true
+    },
+    "hit": {
+      "type": "object",
+      "properties": {
+        "player": { "type": "integer", "minimum": 0, "maximum": 16 },
+        "seq": { "type": "integer", "minimum": 0 },
+        "judgement": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "游戏判定枚举名，例如 PerfectPlus / EarlyPerfect / XPerfect / FailMiss；不同版本取值不同，不要写死白名单"
+        },
+        "timingMs": {
+          "type": "number",
+          "description": "游戏内 Patch 触发时记录的 Timing，不是网络到达时间"
+        },
+        "combo": { "type": "integer", "minimum": 0 },
+        "miss": { "type": "boolean", "description": "true 表示这一下断了 Combo" }
+      },
+      "additionalProperties": true
+    },
+    "gameEvent": {
+      "type": "object",
+      "properties": {
+        "seq": { "type": "integer", "minimum": 0 },
+        "combo": { "type": "integer", "minimum": 0 },
+        "detail": { "type": "string", "maxLength": 512 }
+      },
+      "additionalProperties": true
+    }
+  }
+}
