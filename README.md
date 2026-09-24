@@ -20,7 +20,6 @@ Overlay 插件 (HTML)    → OBS 浏览器源
 | --- | --- | --- |
 | [`TADOFAI.Mod/`](TADOFAI.Mod/) | 游戏内 Mod：采集并上行数据 | C# / .NET Framework 4.8 / Unity Mod Manager + Harmony |
 | [`TADOFAI/`](TADOFAI/) | Core：本地服务、插件系统、WebUI | Python 3.11+ / FastAPI + Uvicorn + Pydantic |
-| `TADOFAI-*.md` | 设计文档（见下方索引） | — |
 
 两个子项目各自有 README，细节都在里面。
 
@@ -42,11 +41,6 @@ cd TADOFAI.Mod
 build.bat
 ```
 
-把 `TADOFAI.Loader.UMM\bin\Release\`（或 `build.bat` 产出的 zip）内容放进
-`<游戏目录>\Mods\TADOFAI.Mod\`，进游戏后在 UMM 里启用。
-
-> 编译需要 `TADOFAI.Mod\libs\` 里放好**你自己游戏目录**的 Managed 程序集与 Unity Mod Manager，
-> 仓库不包含这些文件，见 [`TADOFAI.Mod/README.md`](TADOFAI.Mod/README.md) 第 2 节。
 
 ### 3. 打开页面
 
