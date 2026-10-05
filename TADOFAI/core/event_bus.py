@@ -117,6 +117,24 @@ class EventBus:
             delivered += 1
         return delivered
 
+    def send_to(self, subscriber: Subscriber, message: dict[str, Any]) -> bool:
+        """定向投递一条事件（补发握手信息用）。不满足订阅时返回 False。"""
+        message_type = message.get("type", "")
+        if not subscriber.wants(message_type):
+            return False
+        while subscriber.queue.full():
+            try:
+                subscriber.queue.get_nowait()
+                subscriber.dropped += 1
+            except asyncio.QueueEmpty:
+                break
+        try:
+            subscriber.queue.put_nowait(message)
+        except asyncio.QueueFull:  # 理论上到不了，兜底
+            subscriber.dropped += 1
+            return False
+        return True
+
     # --- 统计 -------------------------------------------------------------
 
     @property

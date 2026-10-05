@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.IO;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
@@ -25,6 +26,12 @@ namespace TADOFAI.Mod
     {
         /// <summary>单次循环最多连续发送的事件数，避免状态帧被事件流长期饿死。</summary>
         private const int EventBudgetPerLoop = 256;
+
+        /// <summary>接收缓冲区大小；入站帧（目前只有 ping/pong 与其后的空数据）不会大。</summary>
+        private const int ReceiveBufferBytes = 4096;
+
+        /// <summary>入站帧上限，超过即丢弃并只告警一次，防止对端灌内存。</summary>
+        private const int MaxInboundBytes = 64 * 1024;
 
         private static readonly ConcurrentQueue<ModMessage> EventQueue = new ConcurrentQueue<ModMessage>();
         private static readonly Stopwatch Uptime = Stopwatch.StartNew();
@@ -150,7 +157,26 @@ namespace TADOFAI.Mod
                         ModLog.Info("Transport: 已连接 Core");
 
                         await SendAsync(socket, BuildHello(), token).ConfigureAwait(false);
-                        await PumpAsync(socket, token).ConfigureAwait(false);
+
+                        // 发送与接收必须同时在跑：ClientWebSocket 只在 ReceiveAsync 里处理
+                        // PING/PONG 控制帧，只发不收的话服务端会在 ping 超时后断开（见 ReceiveLoopAsync）。
+                        using (CancellationTokenSource session = CancellationTokenSource.CreateLinkedTokenSource(token))
+                        {
+                            Task pump = PumpAsync(socket, session.Token);
+                            Task receive = ReceiveLoopAsync(socket, session.Token);
+
+                            await Task.WhenAny(pump, receive).ConfigureAwait(false);
+
+                            session.Cancel();
+                            try
+                            {
+                                await Task.WhenAll(pump, receive).ConfigureAwait(false);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                if (token.IsCancellationRequested) throw;
+                            }
+                        }
                     }
                 }
                 catch (OperationCanceledException)
@@ -219,6 +245,61 @@ namespace TADOFAI.Mod
             }
         }
 
+        /// <summary>
+        /// 读取循环。两个作用：
+        /// 1) ClientWebSocket 只在 ReceiveAsync 内部处理 PING/PONG 控制帧。只发不收时
+        ///    uvicorn 会在 ws_ping_interval + ws_ping_timeout（默认 20s + 20s = 40 秒）后
+        ///    判定客户端失联并断开，表现为「每隔 40 秒断开重连一次」。
+        /// 2) 给 Core → Mod 的控制消息留一条通道（Core 目前不发，收到只记日志）。
+        /// </summary>
+        private static async Task ReceiveLoopAsync(ClientWebSocket socket, CancellationToken token)
+        {
+            byte[] buffer = new byte[ReceiveBufferBytes];
+
+            while (!token.IsCancellationRequested && socket.State == WebSocketState.Open)
+            {
+                WebSocketReceiveResult result;
+
+                try
+                {
+                    result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    ModLog.Info("Transport: 对端关闭了连接");
+                    return;
+                }
+
+                // 收满一帧（控制帧由 ReceiveAsync 内部处理，这里拿到的都是数据帧）
+                MemoryStream frame = new MemoryStream();
+                if (result.Count > 0) frame.Write(buffer, 0, result.Count);
+
+                while (!result.EndOfMessage)
+                {
+                    result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), token).ConfigureAwait(false);
+                    if (result.MessageType == WebSocketMessageType.Close) return;
+                    if (result.Count > 0) frame.Write(buffer, 0, result.Count);
+
+                    if (frame.Length > MaxInboundBytes)
+                    {
+                        ModLog.WarnOnce("Transport.Inbound", "Transport: 入站帧超过 " + MaxInboundBytes + " 字节，已丢弃");
+                        frame.SetLength(0);
+                        break;
+                    }
+                }
+
+                if (frame.Length > 0)
+                {
+                    ModLog.Debug("Transport: 收到 " + frame.Length + " 字节入站数据（当前未被 Core 使用）");
+                }
+            }
+        }
+
         private static async Task SendAsync(ClientWebSocket socket, ModMessage message, CancellationToken token)
         {
             byte[] payload;
@@ -260,6 +341,10 @@ namespace TADOFAI.Mod
             hello.ModVersion = Main.ModVersion;
             hello.GameVersion = VersionSafe.GameVersion;
             hello.Capabilities = VersionSafe.Capabilities;
+            hello.Difficulty = GameRefs.DifficultyName;
+            hello.HitMarginNames = GameRefs.HitMarginNames;
+            hello.HitMarginWeights = GameRefs.HitMarginWeights;
+            hello.HitMarginXScores = GameRefs.HitMarginXScores;
             return hello;
         }
 

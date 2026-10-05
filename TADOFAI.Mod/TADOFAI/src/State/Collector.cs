@@ -12,11 +12,33 @@ namespace TADOFAI.Mod
         /// <summary>刚开局这段时间内的 EndScene 视为「开始阶段的噪声」，直接忽略。</summary>
         private const double StartGraceSeconds = 0.25;
 
+        /// <summary>逐玩家块的采样间隔。判定直方图 / XScore 之类不需要每帧读，20Hz 足够且省反射。</summary>
+        private const double PlayerSampleInterval = 0.05;
+
+        /// <summary>KPS 滑窗容量（只需覆盖最近 1 秒）。</summary>
+        private const int KpsWindow = 64;
+
         private static readonly object Gate = new object();
         private static readonly ModState State = new ModState();
+        private static readonly double[] HitTimes = new double[KpsWindow];
 
         private static float _lastTimingMs;
         private static bool _hasTiming;
+        private static int _hitMarginSlots;
+        private static double _lastPlayerSample;
+        private static int _hitTimeCount;
+        private static int _hitTimeHead;
+
+        /// <summary>HitMargin 枚举值个数（缓存）。</summary>
+        private static int HitMarginSlots
+        {
+            get
+            {
+                if (_hitMarginSlots > 0) return _hitMarginSlots;
+                _hitMarginSlots = GameRefs.HitMarginTypeCount;
+                return _hitMarginSlots;
+            }
+        }
 
         /// <summary>开始新一局（练习模式是否上报由 Settings.TrackPracticeMode 决定）。</summary>
         public static void StartGame(int seqID)
@@ -24,9 +46,26 @@ namespace TADOFAI.Mod
             int seq = seqID > 0 ? seqID : GameRefs.CurrentSeqID;
             MapMeta meta = GameRefs.ReadMapMeta();
 
+            // 全部读取放在锁外：反射与关卡遍历都可能耗时，不该挡住发送线程取快照。
+            int slots = HitMarginSlots;
+            string mapId = GameRefs.MapId;
+            string artist = GameRefs.MapArtist;
+            string author = GameRefs.MapAuthor;
+            string difficultyName = GameRefs.DifficultyName;
+            float mapBpm = (float)GameRefs.MapBpm;
+            float pitch = GameRefs.SongPitch;
+            int floorCount = GameRefs.FloorCount;
+            int playerCount = GameRefs.PlayerCount;
+            float startProgress = GameRefs.PercentComplete;
+            float marginScale = GameRefs.GetPlayerMarginScale(0);
+
+            GameRefs.RefreshLevelCache();
+            double mapLength = GameRefs.MapLength;
+
             lock (Gate)
             {
-                State.ResetForNewGame();
+                State.ResetForNewGame(slots);
+
                 State.Seq = seq;
                 State.Auto = GameRefs.IsAuto;
                 State.Practice = GameRefs.IsPracticeMode;
@@ -36,15 +75,34 @@ namespace TADOFAI.Mod
                 State.Difficulty = meta.Difficulty;
                 State.StartedAt = Transport.NowSeconds;
 
+                State.MapId = mapId;
+                State.MapArtist = artist;
+                State.MapAuthor = author;
+                State.DifficultyName = difficultyName;
+                State.FloorCount = floorCount;
+                State.MapBpm = mapBpm;
+                State.SongPitch = pitch;
+                State.MapLength = mapLength;
+
+                State.PlayerCount = NumUtil.ClampInt(playerCount, 1, GameSnapshot.MaxPlayers);
+                State.StartSeq = seq;
+                State.StartProgress = NumUtil.Clamp01(startProgress);
+                State.MarginScale = marginScale;
+
                 _lastTimingMs = 0f;
                 _hasTiming = false;
+                _hitTimeCount = 0;
+                _hitTimeHead = 0;
+                _lastPlayerSample = 0.0;
             }
 
-            ModLog.Info("游戏开始 seq=" + seq + " song=" + meta.SongName);
+            ModLog.Info("游戏开始 seq=" + seq + " song=" + meta.SongName + " players=" + playerCount);
             Transport.EnqueueEvent(new GameEventMessage(GameEventNames.GameStart, seq, 0));
 
             if (!string.IsNullOrEmpty(meta.SongName))
                 Transport.EnqueueEvent(new GameEventMessage(GameEventNames.MapChanged, seq, 0));
+
+            RefreshPlayers(true);
         }
 
         /// <summary>
@@ -64,7 +122,6 @@ namespace TADOFAI.Mod
         public static void EndScene()
         {
             int seq;
-            double startedAt;
 
             lock (Gate)
             {
@@ -72,11 +129,12 @@ namespace TADOFAI.Mod
                 if (Transport.NowSeconds - State.StartedAt < StartGraceSeconds) return;
 
                 seq = State.Seq;
-                startedAt = State.StartedAt;
                 State.InGame = false;
                 State.GameState = "idle";
                 State.Combo = 0;
             }
+
+            GameRefs.InvalidateLevelCache();
 
             ModLog.Info("场景结束 seq=" + seq);
             Transport.EnqueueEvent(new GameEventMessage(GameEventNames.GameEnd, seq, 0));
@@ -85,14 +143,15 @@ namespace TADOFAI.Mod
         /// <summary>记录一次命中，并自己维护 Combo（不依赖游戏内部 Combo 字段）。</summary>
         public static void RecordHit(HitMargin hit, int player)
         {
-            if (!Settings.Current.SendHits) return;
-
             int value = (int)hit;
             int seq;
             int combo;
             int misses;
             float timing;
             bool miss;
+            bool perfect;
+            bool perfectCombo;
+            bool emit;
 
             lock (Gate)
             {
@@ -101,26 +160,47 @@ namespace TADOFAI.Mod
                 State.Seq = seq;
 
                 miss = HitMarginCompat.BreaksCombo(value);
+                bool isAuto = HitMarginCompat.IsAuto(value);
+                bool isMidspin = HitMarginCompat.IsMidspin(value);
+                perfect = HitMarginCompat.IsPerfectCore(value);
 
-                if (miss)
-                {
-                    State.Combo = 0;
-                    State.Misses++;
-                }
-                else if (!HitMarginCompat.IsAuto(value))
+                // Combo 只统计「中心完美」（JipperOverlayer 的 perfect combo 口径）：
+                //   中心完美            → +1
+                //   中旋 / Auto         → 不变（既不加也不清零）
+                //   其余任何判定（含 miss）→ 清零，并把本局标记为「非完美连击」
+                if (perfect)
                 {
                     State.Combo++;
                     if (State.Combo > State.MaxCombo) State.MaxCombo = State.Combo;
                 }
+                else if (isMidspin || isAuto)
+                {
+                    // 不动
+                }
+                else
+                {
+                    State.Combo = 0;
+                    State.PerfectCombo = false;
+                }
+
+                if (miss) State.Misses++;
 
                 if (_hasTiming) State.TimingMs = _lastTimingMs;
 
                 combo = State.Combo;
                 misses = State.Misses;
                 timing = State.TimingMs;
+                perfectCombo = State.PerfectCombo;
 
                 if (player >= 0 && player < State.PlayerSeq.Length) State.PlayerSeq[player] = seq;
+
+                TrackPlayerHit(player, value, miss, seq);
+                NoteHitTime(Transport.NowSeconds);
+
+                emit = Settings.Current.SendHits;
             }
+
+            if (!emit) return;
 
             HitMessage message = new HitMessage();
             message.Player = player;
@@ -129,49 +209,72 @@ namespace TADOFAI.Mod
             message.TimingMs = timing;
             message.Combo = combo;
             message.Miss = miss;
+            message.Perfect = perfect;
+            message.PerfectCombo = perfectCombo;
             message.Id = Transport.NextId();
+
+            lock (Gate)
+            {
+                if (player >= 0 && player < State.Players.Length)
+                {
+                    PlayerTrack track = State.Players[player];
+                    message.XScore = track.XScore;
+                    message.Judged = track.Judged;
+                    message.PurePerfect = track.PurePerfect;
+                }
+            }
 
             Transport.EnqueueEvent(message);
 
             if (!miss && Settings.Current.SendProgress) UpdatePlayerProgress(player);
         }
 
-        /// <summary>更新准确率。</summary>
+        /// <summary>记录一次检查点（scrController.Checkpoint_Enter）。</summary>
+        public static void RecordCheckpoint()
+        {
+            int seq;
+            int checkpoints;
+
+            lock (Gate)
+            {
+                seq = State.Seq;
+                checkpoints = GameRefs.CheckpointsUsed;
+                State.Checkpoints = checkpoints;
+            }
+
+            GameEventMessage message = new GameEventMessage(GameEventNames.Checkpoint, seq, 0);
+            message.Detail = "checkpoints=" + checkpoints;
+            Transport.EnqueueEvent(message);
+        }
+
+        /// <summary>更新准确率（命中时立即刷新，避免等 20Hz 采样）。</summary>
         public static void UpdateAccuracy(int player)
         {
             if (!Settings.Current.ShowAccuracy) return;
 
-            float accuracy;
-            float xAccuracy;
+            scrMarginTracker tracker = GetTracker(player);
+            if (tracker == null) return;
 
-            try
-            {
-                // 首选从玩家对象取 tracker，取不到再退回 marginTrackers 数组
-                scrMarginTracker tracker = GameRefs.GetPlayerTracker(player);
-                if (tracker == null)
-                {
-                    scrMarginTracker[] trackers = GameRefs.MarginTrackers;
-                    if (trackers == null || player < 0 || player >= trackers.Length) return;
-                    tracker = trackers[player];
-                }
+            float accuracy = Reflect.GetFloat(tracker, "percentAcc", 0f);
+            float xAccuracy = Reflect.GetFloat(tracker, "percentXAcc", 0f);
+            if (!NumUtil.IsFinite(accuracy) && !NumUtil.IsFinite(xAccuracy)) return;
 
-                if (tracker == null) return;
-
-                accuracy = tracker.percentAcc;
-                xAccuracy = tracker.percentXAcc;
-            }
-            catch (Exception ex)
-            {
-                ModLog.WarnOnce("Collector.UpdateAccuracy", "读取准确率失败: " + ex.Message);
-                return;
-            }
-
-            if (!NumUtil.IsFinite(accuracy)) return;
+            float normalized = NumUtil.NormalizeAccuracy(accuracy);
+            float normalizedX = NumUtil.NormalizeAccuracy(xAccuracy);
 
             lock (Gate)
             {
-                State.Accuracy = NumUtil.NormalizeAccuracy(accuracy);
-                State.XAccuracy = NumUtil.NormalizeAccuracy(xAccuracy);
+                if (player == 0)
+                {
+                    State.Accuracy = normalized;
+                    State.XAccuracy = normalizedX;
+                }
+
+                if (player >= 0 && player < State.Players.Length)
+                {
+                    State.Players[player].Accuracy = normalized;
+                    State.Players[player].XAccuracy = normalizedX;
+                }
             }
         }
 
@@ -301,10 +404,15 @@ namespace TADOFAI.Mod
             {
                 if (player >= 0 && player < State.PlayerSeq.Length) State.PlayerSeq[player] = seq;
                 if (seq > State.Seq) State.Seq = seq;
+
+                if (player >= 0 && player < State.Players.Length && seq > 0)
+                {
+                    State.Players[player].Seq = seq;
+                }
             }
         }
 
-        /// <summary>每帧采样一次连续变化的状态（进度 / 准确率 / BPM），由 Main.Update 调用。</summary>
+        /// <summary>每帧采样一次连续变化的状态（时间轴 / 进度 / 准确率 / BPM），由 Main.Update 调用。</summary>
         public static void Sample()
         {
             lock (Gate)
@@ -317,12 +425,28 @@ namespace TADOFAI.Mod
                 int seq = GameRefs.CurrentSeqID;
                 float progress = GameRefs.PercentComplete;
                 bool auto = GameRefs.IsAuto;
+                bool paused = GameRefs.IsPaused;
+                float fps = GameRefs.Fps;
+                int playerCount = GameRefs.PlayerCount;
+                double musicTime = GameRefs.MusicTime;
+                double musicLength = GameRefs.MusicLength;
+                double mapTime = GameRefs.MapTime;
+                double mapLength = GameRefs.MapLength;
+                double now = Transport.NowSeconds;
 
                 lock (Gate)
                 {
                     if (seq > 0) State.Seq = seq;
                     if (NumUtil.IsFinite(progress)) State.Progress = NumUtil.Clamp01(progress);
                     State.Auto = auto;
+                    State.Paused = paused;
+                    State.Fps = fps;
+                    State.PlayerCount = NumUtil.ClampInt(playerCount, 1, GameSnapshot.MaxPlayers);
+                    State.MusicTime = musicTime;
+                    State.MusicLength = musicLength;
+                    State.MapTime = mapTime;
+                    State.MapLength = mapLength;
+                    State.Kps = ComputeKps(now);
                 }
             }
             catch (Exception ex)
@@ -330,8 +454,19 @@ namespace TADOFAI.Mod
                 ModLog.WarnOnce("Collector.Sample", "采样状态失败: " + ex.Message);
             }
 
-            UpdateAccuracy(0);
             UpdateBpm();
+
+            // 逐玩家块（判定直方图 / XScore / 检查点 / 判定窗）按 20Hz 刷新：
+            // 这些量在前端是「面板数值」，不需要 60Hz，省下来的反射开销留给命中路径。
+            bool due;
+            double current = Transport.NowSeconds;
+            lock (Gate)
+            {
+                due = current - _lastPlayerSample >= PlayerSampleInterval;
+                if (due) _lastPlayerSample = current;
+            }
+
+            if (due) RefreshPlayers(false);
         }
 
         /// <summary>构造状态消息。跨线程读取安全（拷贝快照）。</summary>
@@ -363,6 +498,195 @@ namespace TADOFAI.Mod
             }
         }
 
+        #region 内部
+
+        private static void TrackPlayerHit(int player, int value, bool miss, int seq)
+        {
+            if (player < 0 || player >= State.Players.Length) return;
+
+            PlayerTrack track = State.Players[player];
+            track.Seq = seq;
+
+            // 与全局 Combo 同一口径：只有中心完美才续连击。
+            if (HitMarginCompat.IsPerfectCore(value))
+            {
+                track.Combo++;
+                if (track.Combo > track.MaxCombo) track.MaxCombo = track.Combo;
+            }
+            else if (!HitMarginCompat.IsMidspin(value) && !HitMarginCompat.IsAuto(value))
+            {
+                track.Combo = 0;
+                track.PerfectCombo = false;
+            }
+
+            if (value >= 0 && value < track.HitMargins.Length) track.HitMargins[value]++;
+
+            scrMarginTracker tracker = GetTracker(player);
+            if (tracker != null)
+            {
+                track.Judged = Reflect.GetInt(tracker, "playerHitMarginCount", track.Judged + 1);
+                track.XScore = Reflect.GetInt(tracker, "xScore", track.XScore);
+                track.MaxXScore = Reflect.GetInt(tracker, "maxXScore", track.MaxXScore);
+                track.Deaths = Reflect.GetInt(tracker, "deaths", track.Deaths);
+                track.PurePerfect = Reflect.ToBool(Reflect.Call(tracker, "IsAllPurePerfect"), track.PurePerfect);
+            }
+            else
+            {
+                track.Judged++;
+            }
+        }
+
+        /// <summary>
+        /// 逐玩家块刷新。force=true 用于开局（必须立刻有一帧完整数据）。
+        /// </summary>
+        private static void RefreshPlayers(bool force)
+        {
+            int slots = HitMarginSlots;
+            int playerCount;
+            lock (Gate)
+            {
+                playerCount = State.PlayerCount;
+            }
+            playerCount = NumUtil.ClampInt(playerCount, 1, GameSnapshot.MaxPlayers);
+
+            for (int i = 0; i < playerCount; i++)
+            {
+                scrMarginTracker tracker = GetTracker(i);
+                if (tracker == null) continue;
+
+                float accuracy = Reflect.GetFloat(tracker, "percentAcc", 0f);
+                float xAccuracy = Reflect.GetFloat(tracker, "percentXAcc", 0f);
+                int xScore = Reflect.GetInt(tracker, "xScore", 0);
+                int maxXScore = Reflect.GetInt(tracker, "maxXScore", 0);
+                int deaths = Reflect.GetInt(tracker, "deaths", 0);
+                int judged = Reflect.GetInt(tracker, "playerHitMarginCount", 0);
+                float playerProgress = Reflect.GetFloat(tracker, "percentComplete", 0f);
+                bool purePerfect = Reflect.ToBool(Reflect.Call(tracker, "IsAllPurePerfect"), false);
+                bool isAuto = GameRefs.GetPlayerAuto(i);
+                int seq = GameRefs.GetPlayerSeq(i);
+                float marginScale = GameRefs.GetPlayerMarginScale(i);
+                int remaining = GameRefs.CountRemainingHitFloors(seq);
+                int[] counts = GameRefs.GetPlayerHitCounts(i, slots);
+                string color = GameRefs.GetPlayerColorHex(i);
+
+                lock (Gate)
+                {
+                    PlayerTrack track = State.Players[i];
+
+                    if (seq > 0) track.Seq = seq;
+                    if (NumUtil.IsFinite(accuracy)) track.Accuracy = NumUtil.NormalizeAccuracy(accuracy);
+                    if (NumUtil.IsFinite(xAccuracy)) track.XAccuracy = NumUtil.NormalizeAccuracy(xAccuracy);
+
+                    track.XScore = xScore;
+                    track.MaxXScore = maxXScore;
+                    track.Deaths = deaths;
+                    track.Judged = judged > 0 ? judged : track.Judged;
+                    track.Remaining = remaining;
+                    track.PurePerfect = purePerfect;
+                    track.Auto = isAuto;
+                    track.Color = color ?? string.Empty;
+                    track.MarginScale = NumUtil.IsFinite(marginScale) && marginScale > 0f ? marginScale : 1f;
+
+                    if (counts != null && counts.Length == track.HitMargins.Length)
+                    {
+                        for (int k = 0; k < counts.Length; k++) track.HitMargins[k] = counts[k];
+                    }
+
+                    // 玩家 0 的进度以 scrController.percentComplete 为准（它就是主玩家进度）；
+                    // Coop 其余玩家只有 tracker.percentComplete 可用。
+                    if (i == 0 && State.Progress > 0f) track.Progress = State.Progress;
+                    else if (num_finite(playerProgress)) track.Progress = NumUtil.Clamp01(playerProgress);
+
+                    if (i == 0) State.MarginScale = track.MarginScale;
+                }
+            }
+
+            // 判定窗 / 伪 BPM / 关卡长度 只在这一次采样里刷新
+            int currentSeq;
+            lock (Gate)
+            {
+                currentSeq = State.Seq;
+            }
+
+            double[] windows = GameRefs.TimingWindowMs;
+            float[] degrees = GameRefs.TimingWindowDegrees;
+            double denom = GameRefs.TimingDenom;
+            float pseudoBpm = GameRefs.PseudoBpm(currentSeq);
+            float mapBpm = (float)GameRefs.MapBpm;
+            float pitch = GameRefs.SongPitch;
+            int checkpoints = GameRefs.CheckpointsUsed;
+            int floorCount = GameRefs.FloorCount;
+            double mapLength = GameRefs.MapLength;
+            int checkpointTiles = GameRefs.CheckpointTileCount;
+            string mapId = GameRefs.MapId;
+            string difficultyName = GameRefs.DifficultyName;
+
+            lock (Gate)
+            {
+                State.TimingCounted = windows[0];
+                State.TimingPerfect = windows[1];
+                State.TimingPure = windows[2];
+                State.TimingXPerfect = windows[3];
+                State.TimingDenom = denom;
+                State.TimingDegrees = new double[] { degrees[0], degrees[1], degrees[2], degrees[3] };
+
+                State.PseudoBpm = pseudoBpm;
+                State.Checkpoints = checkpoints;
+                if (mapBpm > 0f) State.MapBpm = mapBpm;
+                if (NumUtil.IsFinite(pitch) && pitch > 0f) State.SongPitch = pitch;
+                if (floorCount > 0) State.FloorCount = floorCount;
+                if (mapLength > 0.0) State.MapLength = mapLength;
+                State.CheckpointTileCount = checkpointTiles;
+                if (!string.IsNullOrEmpty(mapId)) State.MapId = mapId;
+                if (!string.IsNullOrEmpty(difficultyName)) State.DifficultyName = difficultyName;
+            }
+
+            if (force)
+            {
+                ModLog.Debug("逐玩家块已建立 players=" + playerCount);
+            }
+        }
+
+        private static scrMarginTracker GetTracker(int player)
+        {
+            try
+            {
+                scrMarginTracker tracker = GameRefs.GetPlayerTracker(player);
+                if (tracker != null) return tracker;
+
+                scrMarginTracker[] trackers = GameRefs.MarginTrackers;
+                if (trackers == null || player < 0 || player >= trackers.Length) return null;
+                return trackers[player];
+            }
+            catch (Exception ex)
+            {
+                ModLog.WarnOnce("Collector.GetTracker", "读取判定追踪器失败: " + ex.Message);
+                return null;
+            }
+        }
+
+        private static bool num_finite(float value)
+        {
+            return NumUtil.IsFinite(value);
+        }
+
+        private static void NoteHitTime(double now)
+        {
+            HitTimes[_hitTimeHead] = now;
+            _hitTimeHead = (_hitTimeHead + 1) % KpsWindow;
+            if (_hitTimeCount < KpsWindow) _hitTimeCount++;
+        }
+
+        private static float ComputeKps(double now)
+        {
+            int count = 0;
+            for (int i = 0; i < _hitTimeCount; i++)
+            {
+                if (now - HitTimes[i] <= 1.0) count++;
+            }
+            return count;
+        }
+
         private static void UpdatePlayerProgress(int player)
         {
             int seq = GameRefs.GetPlayerSeq(player);
@@ -372,6 +696,7 @@ namespace TADOFAI.Mod
             {
                 if (player >= 0 && player < State.PlayerSeq.Length) State.PlayerSeq[player] = seq;
                 if (seq > State.Seq) State.Seq = seq;
+                if (player >= 0 && player < State.Players.Length) State.Players[player].Seq = seq;
             }
         }
 
@@ -390,5 +715,7 @@ namespace TADOFAI.Mod
 
             return 0;
         }
+
+        #endregion
     }
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 from typing import Any
 
 from fastapi import WebSocket
@@ -41,6 +42,8 @@ class Services:
         self._mod_socket: WebSocket | None = None
         self._mod_session = 0
         self._client_sockets: set[WebSocket] = set()
+        #: 最近一次 Mod 握手载荷（原样保存 camelCase），用于向后来连上的插件补发
+        self._last_hello: dict[str, Any] | None = None
 
     # --- 生命周期 ---------------------------------------------------------
 
@@ -151,6 +154,7 @@ class Services:
     async def handle_mod_message(self, parsed: ParsedMessage) -> None:
         if parsed.type == TYPE_HELLO:
             self.health.note_hello(parsed.data)
+            self._last_hello = dict(parsed.data or {})
             self.log.info(
                 "Mod 握手: client=%s mod=%s game=%s capabilities=%s",
                 self.health.mod_client or "?",
@@ -167,6 +171,19 @@ class Services:
         message = make_message(parsed.type, parsed.data, message_id=parsed.id)
         delivered = self.event_bus.publish_event(message)
         self.log.debug("事件 %s -> %d 个客户端", parsed.type, delivered)
+
+    def hello_message(self) -> dict[str, Any] | None:
+        """
+        最近一次握手帧（可直接发送）。
+
+        插件常常在 Mod 之后才连上，若只依赖事件流就永远收不到 hello；
+        因此 client_gateway 会在插件订阅后补发一份，保证 capabilities 与
+        hitMarginNames 一定拿得到。
+        """
+        if not self._last_hello:
+            return None
+        # 深拷贝：这份载荷会被反复补发给不同插件，不能与缓存共享可变对象
+        return make_message(TYPE_HELLO, copy.deepcopy(self._last_hello))
 
     # --- 统计 -------------------------------------------------------------
 

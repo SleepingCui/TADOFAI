@@ -11,7 +11,7 @@ namespace TADOFAI.Mod
     public static class Main
     {
         public const string HarmonyId = "TADOFAI.Mod";
-        public const string ModVersion = "0.1.0";
+        public const string ModVersion = "0.2.0";
 
         private static double _lastStatePublish;
 
@@ -98,6 +98,7 @@ namespace TADOFAI.Mod
             // 生命周期与判定路径
             PatchManager.Register(typeof(GameLifecyclePatches));
             PatchManager.Register(typeof(PlayPatches));
+            PatchManager.Register(typeof(CheckpointPatches));
 
             // Timing Patch 始终挂载，开关在方法内部快速判断
             PatchManager.Register(typeof(TimingPatches));

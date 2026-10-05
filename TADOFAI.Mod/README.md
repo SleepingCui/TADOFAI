@@ -34,7 +34,9 @@ TADOFAI.Mod/
 │     ├─ Main.cs                 Enable / Disable / Update
 │     ├─ PatchManager.cs         注册、启用、按自己的 Harmony ID 卸载
 │     ├─ GameRefs.cs             集中读取游戏对象
-│     ├─ VersionSafe.cs          版本探测 + HitMarginCompat 判定语义
+│     ├─ GameRefs.Extended.cs    时间轴 / 判定表 / 逐玩家等扩展读取
+│     ├─ Reflect.cs              带缓存的跨版本反射读写（不抛异常，读不到给回退值）
+│     ├─ VersionSafe.cs          版本探测 + HitMarginCompat 判定语义 + 能力位
 │     ├─ Settings.cs             Settings.xml（原子写入）
 │     ├─ SettingsUI.cs           游戏内配置面板（IMGUI）
 │     ├─ NumUtil.cs / ModLog.cs
@@ -42,7 +44,7 @@ TADOFAI.Mod/
 │     ├─ State/                  Collector、ModState
 │     ├─ Protocol/               消息模型 + 手写 JsonWriter
 │     ├─ Transport/Transport.cs  有限队列 + 单线程 WebSocket
-│     └─ Patches/                6 组 Patch
+│     └─ Patches/                7 组 Patch
 └─ TADOFAI.Loader.UMM/           Unity Mod Manager 适配 → TADOFAI.Loader.UMM.dll
    ├─ TADOFAI.Loader.UMM.csproj
    ├─ UnityModEntry.cs           UMM 入口（info.json 的 EntryMethod 指向这里）
@@ -120,22 +122,74 @@ TADOFAI.Mod\
 信封：`{ type, version, id, timestamp, data }`。`timestamp` 是 Mod 采集时刻的单调秒，
 Core 不使用网络到达时间。`id` 只给逐条事件，用于检测丢失 / 重复。
 
-- `hello`：连接后第一帧，含 `client` / `modVersion` / `gameVersion` / `capabilities`。
+- `hello`：连接后第一帧，含 `client` / `modVersion` / `gameVersion` / `capabilities`，
+  以及判定表元数据 `difficulty`（难度枚举名）/ `hitMarginNames[]`（下标 = `HitMargin` 枚举值）/
+  `hitMarginWeights[]` / `hitMarginXScores[]`。前端靠这张表把 `hitMargins` 下标翻译成判定名，
+  不需要在网页里写死任何判定数值。
+
+  `capabilities` 是**运行时探测**出来的（`VersionSafe.SetupCapabilities()`），不是固定列表。
+  基础 5 项 `hit` / `timing` / `accuracy` / `bpm` / `progress`，其余按游戏程序集实际有的成员追加：
+  `xperfect` / `hitmargins` / `mapmeta` / `timeline` / `coop` / `checkpoint` / `paused` / `fps` /
+  `timingwindows` / `kps` / `pseudobpm` / `checkpointtiles` / `perfectcombo`。前端应逐项判断，缺哪项就隐藏对应显示。
+
 - `state`：状态流，覆盖式，按 `StateRate`（默认 60Hz）合并发送：
 
 ```json
 {"type":"state","version":1,"timestamp":12.5,"data":{
   "connected":true,"gameState":"playing","droppedEvents":0,"auto":false,"practice":false,"noFail":false,
-  "map":{"songName":"","songAuthor":"","difficulty":0},
-  "play":{"seq":421,"progress":0.523,"combo":128,"maxCombo":200,"accuracy":0.9912,"xAccuracy":0.98,
-          "bpm":180,"timingMs":-1.37,"misses":2},
-  "playerSeq":[421,0,0,0,0,0,0,0]}}
+  "paused":false,"fps":143.7,"playerCount":2,
+  "map":{"id":"abcdef01…","songName":"","artist":"","songAuthor":"","author":"谱师","difficulty":2,
+         "difficultyName":"Strict","floorCount":1024,"bpm":180,"pitch":1,"duration":214.3,"checkpointTiles":37},
+  "timeline":{"musicTime":12.5,"musicLength":214.3,"mapTime":11.25,"mapLength":214.3},
+  "timingWindows":{"counted":40,"perfect":45,"pure":30,"xPerfect":12.5,"denom":540,
+                  "degrees":[40,45,30,12.5]},
+  "play":{"seq":421,"progress":0.523,"combo":128,"maxCombo":200,"perfectCombo":true,"accuracy":0.9912,"xAccuracy":0.98,
+          "bpm":180,"tileBpm":360,"currentBpm":358.2,"pseudoBpm":358.2,"kps":6.2,"timingMs":-1.37,
+          "misses":2,"judged":513,"remaining":688,"xScore":902,"maxXScore":2056,"xScorePotential":2276,
+          "deaths":4,"checkpoints":3,"purePerfect":false,"startSeq":0,"startProgress":0,"marginScale":1},
+  "players":[{"player":0,"seq":421,"progress":0.523,"combo":128,"maxCombo":200,"perfectCombo":true,"accuracy":0.9912,
+              "xAccuracy":0.98,"xScore":902,"maxXScore":2056,"deaths":4,"judged":513,"remaining":688,
+              "purePerfect":false,"auto":false,"color":"4DCCFF","marginScale":1,
+              "hitMargins":[3,0,0,0,240,0,0,0,0,5,0,0,0,2,0,0]}],
+  "playerSeq":[421,498,0,0,0,0,0,0]}}
 ```
 
-- `hit`：逐条事件，低延迟优先：`player` / `seq` / `judgement` / `timingMs` / `combo` / `miss`。
+  要点：
+
+  - `players[]` 长度 = `playerCount`，**逐玩家**给出进度 / 准确率 / X-Score / 死亡 / 判定直方图，
+    单人局也有第 0 项（`Coop` 与单人共用同一结构）。
+  - `hitMargins` 是「下标 = `HitMargin` 枚举值」的计数数组，名字由 `hello.hitMarginNames` 提供；
+    只统计游戏认定的「玩家命中」判定（`HitMarginHelper.PlayerHitMarginTypes`）。
+  - `map.id` 是游戏算出的谱面哈希（`LevelData.Hash`），可直接当本地记录的键。
+    `artist` 是曲师、`songAuthor` 是曲名里的作者串、`author` 才是谱师，三者不要混用。
+  - `timingWindows` 是判定窗毫秒：`counted` / `perfect` / `pure` / `xPerfect`，
+    另附 `denom` 与 `degrees[]`（角度边界）供前端复核，
+    公式 `ms = deg * 1000 / (3 * bpm * speedTrial * pitch)`。
+    **算不出分母时该字段整体写 `null`，绝不发假判定窗**，前端要判空。
+  - `combo` 是**完美连击**：只有中心完美判定（`PerfectMinus` / `XPerfect` / `PerfectPlus`，
+    老版本是 `Perfect`）才 `+1`；`Midspin` 与 `Auto` 不变；其余判定清零。
+    `perfectCombo` 记录「本局至今有没有被非完美判定打断过」，一旦 `false` 本局不再回 `true`，
+    下一局重置 —— 前端用它决定 Combo 标题显示「完美」还是「连击」（同 JipperOverlayer）。
+  - `playerSeq` 是历史字段，保留仅为兼容旧前端；新前端请读 `players[].seq`。
+
+- `hit`：逐条事件，低延迟优先：`player` / `seq` / `judgement` / `timingMs` / `combo` / `miss`，
+  以及派生值 `xScore` / `judged` / `purePerfect`，另加 `perfect`（本条是否中心完美）与
+  `perfectCombo`（本条之后本局的完美连击状态）。
 - `game.start` / `game.end` / `map.changed` / `state.changed` / `death` / `checkpoint`。
+  `checkpoint` 由 `scrController.Checkpoint_Enter` 触发，`detail` 形如 `checkpoints=3`。
 
 所有数值出口都过 `NumUtil`：NaN / Infinity 写 `null`，字符串截断到 512 字符。
+
+### 4.1 网页端拿得到什么、拿不到什么
+
+上面的字段足以在网页里复刻指标显示（判定分布、X-Score 潜力、逐玩家面板、时间轴、判定窗）。
+但下面几项是**游戏进程内的行为，没有任何上报能替代**，不要在网页端尝试复刻：
+
+- `HideDebugText`、beta 水印、等级名改写、Auto 文本重排 —— 这些是 Mod 直接改游戏 UI 对象的 Harmony 补丁；
+- 自定义字体注入；
+- 游戏本身渲染出的帧率（上报的 `fps` 是游戏帧率，不是网页的）。
+
+判定面板配色也不上报：前端用的是 `web/sdk/protocol.js` 里的固定色，若要跟游戏内设置联动需要再扩协议。
 
 ## 5. 线程与高频
 
@@ -146,8 +200,21 @@ Harmony Postfix → ConcurrentQueue<ModMessage> → Transport 线程 → ClientW
 - Patch 里只采集 + 入队，不做网络 IO、不序列化；
 - 状态用 `Interlocked.Exchange` 覆盖旧值，事件队列上限 `MaxQueuedEvents`，满了丢最旧并计入 `droppedEvents`；
 - 同一 WebSocket 只有一个发送线程；单次循环最多连发 256 个事件，避免状态帧被饿死；
+- **同一连接上还有一个接收循环**（`Transport.ReceiveLoopAsync`）：它负责处理 WebSocket 控制帧。
+  没有它，客户端不会回 PONG，uvicorn（默认 `ws_ping_interval=20s` + `ws_ping_timeout=20s`）
+  会每 40 秒主动断开一次 —— 这正是早期「连接每隔 40 秒闪断重连」的原因。
+  入站数据帧目前 Core 不下发，收到只记日志（并限制在 64KB 内），但通道已打通，后续可加 Core→Mod 控制消息；
 - 断线按 250ms / 500ms / 1s / 2s 退避重连，重连后先补一帧完整状态；
 - 所有 Patch 异常只禁用对应功能，不让 Mod 退出。
+
+采集成本分层，避免每帧遍历玩家：
+
+- 时间轴（`musicTime` / `mapTime`）、`paused`、`fps`、`playerCount` 每帧采一次；
+- 逐玩家块（`players[]` 的准确率 / X-Score / 死亡 / 判定直方图 / 剩余格）按 **20Hz**（`PlayerSampleInterval = 0.05`）
+  采样，结果缓存在 `ModState` 里，状态帧直接读缓存；
+- Combo / seq / 进度 / 命中仍由 Harmony 事件即时写入，不受采样率影响；
+- 关卡缓存（末格 `entryTime`、检查点格、`PlayerHitFloors` 排序表）只在开局与场景切换时重建，
+  失效后最多 0.5 秒重试一次。
 
 50000 BPM（约 833 events/s）下 Patch 路径无锁竞争、无分配热点。
 
@@ -157,6 +224,7 @@ Harmony Postfix → ConcurrentQueue<ModMessage> → Transport 线程 → ClientW
 | --- | --- | --- |
 | GameLifecyclePatches | `scnGame.Play`、`scrPressToStart.ShowText`、`scrUIController.WipeToBlack`、`scnEditor.ResetScene`、`scrController.StartLoadingScene`、`SceneManager.Internal_SceneUnloaded` | 开局 / 结束 / 场景切换 |
 | PlayPatches | `StateBehaviour.ChangeState(Enum)`、`scrPlanet.MoveToNextFloor`、`RDC.auto` setter | 死亡 / 通关 / 进度 / Auto |
+| CheckpointPatches | `scrController.Checkpoint_Enter` | 过检查点（发出 `checkpoint` 事件） |
 | V141Patches | `scrMarginTracker.AddHit`、`scrPlayer.Hit` | r141+ 命中与 BPM |
 | V141AccuracyPatch | `scrMarginTracker.CalculatePercentAcc` | 准确率（注册时按开关门控） |
 | V136Patches | `scrMistakesManager.AddHit`、`scrController.Hit` | r136 旧路径 |
@@ -171,27 +239,43 @@ Harmony Postfix → ConcurrentQueue<ModMessage> → Transport 线程 → ClientW
 
 `HitMarginCompat` 在启动时按**枚举名**建立映射，绝不写死数值（不同版本判定枚举会位移）：
 
-- 完美核心（保持 Combo）：名字含 `perfect` 且不是 `Auto`；
-  r340 上即 `EarlyPerfect` / `PerfectMinus` / `PerfectPlus` / `LatePerfect` / `XPerfect`；
-- 断 Combo：名字含 `fail` / `miss` / `overload`；
+- **中心完美（完美连击，加 Combo）**：与 JipperOverlayer 同口径 ——
+  若枚举里有 `XPerfect` 这类名字（`HasNativeXPerfect`），中心完美是
+  `PerfectMinus` / `XPerfect` / `PerfectPlus`；否则是 `Perfect`。
+  **`EarlyPerfect` / `LatePerfect` 不算中心完美**（它们只在扩展口径 `IsPerfectExtended` 里算完美）；
+  若上面两个名字都找不到（版本改名），退化为「名字含 `perfect` 且不属于 early / late」——
+  在 r340 布局下推得 `{ PerfectMinus, XPerfect, PerfectPlus }`、在 r148 布局下推得 `{ Perfect }`，结果等价，
+  此时会打一条 `ModLog.Warn` 说明走了推定路径；
+- 扩展完美（`IsPerfectExtended`）= 中心完美 + `EarlyPerfect` / `LatePerfect`；
+- 断 Combo 的失败判定：名字含 `fail` / `miss` / `overload`；
   r340 上即 `FailMiss` / `FailOverload` / `FailedFloor`；
-- `Multipress` / `OverPress` / `Midspin` 按「非完美但不中断 Combo」处理；
-- `Auto` 不参与 Combo 计数。
+- `Midspin`（中旋）与 `Auto` **不改变** Combo（既不加也不清零），其余判定一律清零；
+- 每次清零会把 `perfectCombo` 置为 `false`（本局粘性）。
 
-如果名字解析失败，**不做数值兜底**，直接禁用 Combo / Miss 统计并报错，避免给出错误判定。
+如果连 fallback 都推不出中心完美，**不做数值兜底**，直接禁用 Combo / Miss 统计，
+并把当前 `HitMargin` 的实际枚举成员打进日志（`ModLog.Error`），便于实机核对游戏版本。
 `judgement` 字段直接使用游戏枚举名（如 `PerfectPlus`、`FailMiss`），Core 侧按字符串处理。
 
 > 注意：r340 的 `HitMargin` 没有单独的 `Perfect`，而是 `PerfectMinus` / `PerfectPlus`。
-> 上面的分类是本 Mod 的策略，若要和游戏内显示完全一致，按需调整这一处即可。
+> 分类顺序是「先找 XPerfect 类名字，找不到才退回 `Perfect`」，所以 r148 风格枚举也能正确工作。
 
 ## 8. Combo / 准确率来源
 
-- Combo 与 Miss 由 `Collector` 自己维护，不读游戏内部 Combo 字段；
+- Combo 与 Miss 由 `Collector` 自己维护，不读游戏内部 Combo 字段；口径见 §7（只算中心完美）；
+- `perfectCombo` 是「本局是否仍然全完美」的粘性布尔，前端据此在「完美 / 连击」两个标题间切换；
+- `SendHits` 只决定**要不要发 `hit` 事件**，统计（Combo / Miss / 判定直方图 / X-Score）照常进行，
+  所以关掉命中事件流不会让状态帧里的计数变成空；
 - 准确率读 `scrMarginTracker.percentAcc` / `percentXAcc`：优先
   `scrPlayerManager.instance.allPlayers[player].marginTracker`，兜底
   `scrMistakesManager.marginTrackers[player]`（r340 里该字段是静态的）；
   数值按 0~1 与 0~100 两种版本差异做了归一（`NumUtil.NormalizeAccuracy`）；
 - BPM 用 `scrFloor.entryTime` 相邻差计算（`60 / (delta / pitch)`），异常值回退到 `scrConductor.bpm`；
+  `tileBpm` 是同一算法、`currentBpm` 再乘当前倍速/音高；`pseudoBpm` 取最近 8 个命中格的
+  `entryTime` 跨度（`60 * steps / elapsed`），用于识别变速图里的伪 BPM；
+  `kps` 是最近 64 次命中的每秒命中数；
+- 判定直方图与 `xScore` / `maxXScore` 直接读 `scrMarginTracker.hitMarginsCount` / `xScore` / `maxXScore`，
+  `judged` 读 `playerHitMarginCount`；`remaining` 由 `scrLevelMaker.PlayerHitFloors` 排序表二分得到；
+- `xScorePotential` = 当前 `xScore` + 剩余命中格 × 2（每个 X 完美格算 2 分）；
 - Coop 下 `MoveToNextFloor` 的参数不代表当前玩家，按 `scrPlanet.player.playerID` 区分。
 
 ## 9. 配置

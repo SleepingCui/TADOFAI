@@ -26,7 +26,7 @@
     <div class="panel-main">
       <div class="combo-box">
         <div class="combo-ring"></div>
-        <div class="combo-label">COMBO</div>
+        <div class="combo-label" id="combo-title">完美</div>
         <div class="combo-value" id="combo">0</div>
       </div>
 
@@ -36,6 +36,9 @@
           <span class="tag tag-state" id="game-state">空闲</span>
           <span class="tag" id="difficulty">--</span>
           <span class="tag" id="progress-text">0.0%</span>
+        </div>
+        <div class="tags">
+          <span class="tag tag-dim" id="map-info">--</span>
         </div>
       </div>
     </div>
@@ -57,6 +60,70 @@
     </div>
   </div>
 
+  <!-- 扩展数据面板：时间轴 / 判定分布 / X-Score / 逐玩家 -->
+  <div class="x-deck" id="x-deck">
+
+    <div class="x-card x-card-clock">
+      <div class="x-title">时间轴</div>
+      <div class="x-line">
+        <span class="x-k">音乐</span>
+        <span class="x-v" id="x-music-time">--:--</span>
+        <span class="x-sub" id="x-music-len">/ --:--</span>
+      </div>
+      <div class="x-line">
+        <span class="x-k">地图</span>
+        <span class="x-v" id="x-map-time">--:--</span>
+        <span class="x-sub" id="x-map-len">/ --:--</span>
+      </div>
+      <div class="x-line">
+        <span class="x-k">速度</span>
+        <span class="x-v" id="x-kps">--</span>
+        <span class="x-sub">KPS</span>
+      </div>
+      <div class="x-line">
+        <span class="x-k">BPM</span>
+        <span class="x-v" id="x-bpm-tile">--</span>
+        <span class="x-sub" id="x-bpm-extra">伪 --</span>
+      </div>
+      <div class="x-line x-line-caps">
+        <span class="x-k">能力</span>
+        <span class="x-v x-caps" id="x-caps">--</span>
+      </div>
+    </div>
+
+    <div class="x-card x-card-hist">
+      <div class="x-title">判定分布 <span class="x-sub" id="x-hist-total"></span></div>
+      <div class="x-hist" id="x-hist"><div class="x-empty">等待数据…</div></div>
+    </div>
+
+    <div class="x-card x-card-score">
+      <div class="x-title">X-Score <span class="x-sub" id="x-pure"></span></div>
+      <div class="x-line"><span class="x-k">当前</span><span class="x-v" id="x-xscore">0</span></div>
+      <div class="x-line"><span class="x-k">理论满</span><span class="x-v" id="x-maxscore">0</span></div>
+      <div class="x-line"><span class="x-k">潜力</span><span class="x-v" id="x-potential">0</span></div>
+      <div class="x-line">
+        <span class="x-k">判定格</span>
+        <span class="x-v" id="x-judged">0</span>
+        <span class="x-sub" id="x-remaining">剩 0</span>
+      </div>
+      <div class="x-line">
+        <span class="x-k">死亡</span>
+        <span class="x-v" id="x-deaths">0</span>
+        <span class="x-sub" id="x-checkpoints">CP 0</span>
+      </div>
+      <div class="x-line">
+        <span class="x-k">判定窗</span>
+        <span class="x-v" id="x-window">--</span>
+      </div>
+    </div>
+
+    <div class="x-card x-card-players" id="x-players-card">
+      <div class="x-title">逐玩家 <span class="x-sub" id="x-player-count"></span></div>
+      <div class="x-players" id="x-players"></div>
+    </div>
+
+  </div>
+
   <!-- 命中提示 -->
   <div class="hit" id="hit">
     <div class="hit-echo" id="hit-echo"></div>
@@ -66,6 +133,9 @@
 
   <!-- Combo 里程碑爆发 -->
   <div class="milestone" id="milestone"><span id="milestone-text"></span></div>
+
+  <!-- 检查点提示 -->
+  <div class="x-notice" id="x-notice"></div>
 
   <!-- 结算横幅 -->
   <div class="banner" id="banner">

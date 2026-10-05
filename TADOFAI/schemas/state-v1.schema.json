@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://tadofai.local/schemas/state-v1.schema.json",
   "title": "TADOFAI state message v1",
-  "description": "状态流：只保存最新值，由 Core 按 server.stateRate 广播（默认 60Hz）。字段一律 camelCase。",
+  "description": "状态流：只保存最新值，由 Core 按 server.stateRate 广播（默认 60Hz）。字段一律 camelCase。新增字段全部可选，老 Mod 不带这些键也能通过校验；前端应先看 hello.capabilities 再决定渲染哪些块。",
   "type": "object",
   "required": ["type", "version", "timestamp", "data"],
   "properties": {
@@ -23,11 +23,25 @@
         "auto": { "type": "boolean" },
         "practice": { "type": "boolean" },
         "noFail": { "type": "boolean" },
+        "paused": { "type": "boolean", "description": "游戏暂停中（暂停时时间轴停走，前端据此冻结计时）" },
+        "fps": { "type": "number", "minimum": 0, "maximum": 1000, "description": "游戏帧率（1/averageFrameTime）" },
+        "playerCount": { "type": "integer", "minimum": 1, "maximum": 16 },
         "map": { "$ref": "#/$defs/map" },
+        "timeline": { "$ref": "#/$defs/timeline" },
+        "timingWindows": {
+          "description": "判定窗（毫秒）。关卡速度未知时为 null",
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/timingWindows" }]
+        },
         "play": { "$ref": "#/$defs/play" },
+        "players": {
+          "type": "array",
+          "description": "逐玩家状态，长度等于 playerCount。单人也有一项（player=0）",
+          "items": { "$ref": "#/$defs/player" },
+          "maxItems": 16
+        },
         "playerSeq": {
           "type": "array",
-          "description": "Coop 时每个玩家当前所在 Floor 的 seqID，下标即 player",
+          "description": "兼容旧前端：Coop 时每个玩家当前所在 Floor 的 seqID，下标即 player。新代码请用 players[].seq",
           "items": { "type": "integer", "minimum": 0 },
           "maxItems": 16
         },
@@ -41,9 +55,57 @@
     "map": {
       "type": "object",
       "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "地图哈希（LevelData.Hash）。本地成绩 / 标签 / 历史的唯一键"
+        },
         "songName": { "type": "string", "maxLength": 512 },
+        "artist": { "type": "string", "maxLength": 512, "description": "曲师（LevelData.artist）" },
         "songAuthor": { "type": "string", "maxLength": 512 },
-        "difficulty": { "type": "integer", "minimum": 0, "maximum": 99 }
+        "author": { "type": "string", "maxLength": 512, "description": "谱师（LevelData.author），与 artist 不同" },
+        "difficulty": { "type": "integer", "minimum": 0, "maximum": 99 },
+        "difficultyName": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "难度名（Lenient / Normal / Strict）"
+        },
+        "floorCount": { "type": "integer", "minimum": 0 },
+        "bpm": { "type": "number", "minimum": 0, "description": "谱面标称 BPM" },
+        "pitch": { "type": "number", "minimum": 0, "description": "歌曲倍速（AudioSource.pitch）" },
+        "duration": { "type": "number", "minimum": 0, "description": "谱面总时长（秒）" },
+        "checkpointTiles": { "type": "integer", "minimum": 0, "description": "谱面里预先摆放的检查点砖数量" }
+      },
+      "additionalProperties": true
+    },
+    "timeline": {
+      "type": "object",
+      "properties": {
+        "musicTime": { "type": "number", "description": "歌曲已播放秒数（AudioSource.time）" },
+        "musicLength": { "type": "number", "minimum": 0, "description": "歌曲总长度（秒）。0 表示未知" },
+        "mapTime": { "type": "number", "description": "地图时间轴位置（songposition_minusi + addoffset）" },
+        "mapLength": { "type": "number", "minimum": 0, "description": "谱面总时长（秒）" }
+      },
+      "additionalProperties": true
+    },
+    "timingWindows": {
+      "type": "object",
+      "properties": {
+        "counted": { "type": "number", "minimum": 0, "description": "Good 判定窗半角（毫秒）" },
+        "perfect": { "type": "number", "minimum": 0, "description": "Perfect 判定窗半角（毫秒）" },
+        "pure": { "type": "number", "minimum": 0, "description": "纯完美判定窗半角（毫秒）" },
+        "xPerfect": { "type": "number", "minimum": 0, "description": "XPerfect 判定窗半角（毫秒）" },
+        "denom": {
+          "type": "number",
+          "minimum": 0,
+          "description": "换算分母：ms = 角度 * 1000 / denom。前端可用它复核上面四个值"
+        },
+        "degrees": {
+          "type": "array",
+          "description": "角度边界（度）[counted, perfect, pure, xPerfect]",
+          "items": { "type": "number" },
+          "maxItems": 8
+        }
       },
       "additionalProperties": true
     },
@@ -52,13 +114,76 @@
       "properties": {
         "seq": { "type": "integer", "minimum": 0 },
         "progress": { "type": "number", "minimum": 0, "maximum": 1 },
-        "combo": { "type": "integer", "minimum": 0 },
+        "combo": { "type": "integer", "minimum": 0, "description": "完美连击：只有中心完美判定会 +1（中旋 / Auto 不变，其余清零）" },
         "maxCombo": { "type": "integer", "minimum": 0 },
+        "perfectCombo": {
+          "type": "boolean",
+          "description": "Combo 是否仍是完美连击（本局只出现过中心完美判定）。false 后本局不再变回 true；对应 JipperOverlayer 的「完美 / 连击」标题"
+        },
         "accuracy": { "type": "number", "minimum": 0, "maximum": 1 },
         "xAccuracy": { "type": "number", "minimum": 0, "maximum": 1 },
-        "bpm": { "type": "number", "minimum": 0 },
+        "bpm": { "type": "number", "minimum": 0, "description": "当前节拍器 BPM" },
+        "tileBpm": { "type": "number", "minimum": 0, "description": "谱面标称 BPM" },
+        "currentBpm": { "type": "number", "minimum": 0, "description": "与 bpm 同义，保留给显式区分 tile/current 的前端" },
+        "pseudoBpm": {
+          "type": "number",
+          "minimum": 0,
+          "description": "伪 BPM：按最近若干命中格的 entryTime 跨度折算。仅对 BPM>=200 的谱面有意义"
+        },
+        "kps": { "type": "number", "minimum": 0, "description": "最近 1 秒的命中次数" },
         "timingMs": { "type": "number", "minimum": -1000, "maximum": 1000 },
-        "misses": { "type": "integer", "minimum": 0 }
+        "misses": { "type": "integer", "minimum": 0, "description": "失败判定次数（FailMiss / FailOverload / FailedFloor）" },
+        "judged": { "type": "integer", "minimum": 0, "description": "已判定格数（各玩家之和）" },
+        "remaining": { "type": "integer", "minimum": 0, "description": "剩余玩家命中格数（各玩家之和）" },
+        "xScore": { "type": "integer", "minimum": 0, "description": "X 分数（scrMarginTracker.xScore）" },
+        "maxXScore": { "type": "integer", "minimum": 0, "description": "本谱面 X 分数上限" },
+        "xScorePotential": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "X 分数潜力：当前 XScore + 剩余格全 XPerfect 的外推上限"
+        },
+        "deaths": { "type": "integer", "minimum": 0 },
+        "checkpoints": { "type": "integer", "minimum": 0, "description": "本局已使用的检查点数" },
+        "purePerfect": { "type": "boolean", "description": "是否保持纯完美" },
+        "startSeq": { "type": "integer", "minimum": 0, "description": "本局起始格（练习 / 检查点开局非 0）" },
+        "startProgress": { "type": "number", "minimum": 0, "maximum": 1 },
+        "marginScale": { "type": "number", "minimum": 0, "description": "玩家贴合度缩放，判定窗要乘它" }
+      },
+      "additionalProperties": true
+    },
+    "player": {
+      "type": "object",
+      "properties": {
+        "player": { "type": "integer", "minimum": 0, "maximum": 15 },
+        "seq": { "type": "integer", "minimum": 0 },
+        "progress": { "type": "number", "minimum": 0, "maximum": 1 },
+        "combo": { "type": "integer", "minimum": 0, "description": "该玩家的完美连击" },
+        "maxCombo": { "type": "integer", "minimum": 0 },
+        "perfectCombo": {
+          "type": "boolean",
+          "description": "该玩家的 Combo 是否仍是完美连击（本局只出现过中心完美判定）"
+        },
+        "accuracy": { "type": "number", "minimum": 0, "maximum": 1 },
+        "xAccuracy": { "type": "number", "minimum": 0, "maximum": 1 },
+        "xScore": { "type": "integer", "minimum": 0 },
+        "maxXScore": { "type": "integer", "minimum": 0 },
+        "deaths": { "type": "integer", "minimum": 0 },
+        "judged": { "type": "integer", "minimum": 0 },
+        "remaining": { "type": "integer", "minimum": 0 },
+        "purePerfect": { "type": "boolean" },
+        "auto": { "type": "boolean", "description": "该玩家当前处于 Auto（复活 / Auto 模式）" },
+        "color": {
+          "type": "string",
+          "maxLength": 16,
+          "description": "玩家主题色，RRGGBB（无 #）。Coop 判定面板按颜色区分玩家"
+        },
+        "marginScale": { "type": "number", "minimum": 0 },
+        "hitMargins": {
+          "type": "array",
+          "description": "判定直方图：下标 = HitMargin 枚举值，名字见 hello.hitMarginNames",
+          "items": { "type": "integer", "minimum": 0 },
+          "maxItems": 32
+        }
       },
       "additionalProperties": true
     }

@@ -8,7 +8,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from .event_bus import Subscriber
 from .logging_setup import get_logger
-from .models import TYPE_STATE
+from .models import TYPE_HELLO, TYPE_STATE
 from .protocol import ProtocolError, dumps, make_message, parse_subscribe
 
 #: 同时连接的插件客户端上限
@@ -71,6 +71,12 @@ def register_client_gateway(app: FastAPI, services) -> None:
                     subscriber.want_state,
                     ",".join(sorted(subscriber.events)) or "-",
                 )
+                # 订阅里包含 hello 时补发最近一次握手：插件通常晚于 Mod 连上，
+                # 只靠事件流会永远拿不到 capabilities / hitMarginNames。
+                if subscriber.wants(TYPE_HELLO):
+                    hello = services.hello_message()
+                    if hello is not None:
+                        services.event_bus.send_to(subscriber, hello)
                 # 订阅完立刻补一份完整状态，页面刷新后不用等下一个状态变化
                 if subscriber.want_state:
                     await _push_state(websocket, services, subscriber)

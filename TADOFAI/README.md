@@ -102,14 +102,22 @@ Mod 的 `Settings.xml` 里 `ServerUrl` 默认就是 `ws://127.0.0.1:37125/ws/mod
 
 ```json
 {"core":"ok","protocolVersion":1,"modConnected":true,
- "modClient":"tadofai-mod","modVersion":"0.1.0","gameVersion":"3.3.1",
- "capabilities":["hit","timing","accuracy","bpm","progress"],
+ "modClient":"tadofai-mod","modVersion":"0.2.0","gameVersion":"3.3.1",
+ "capabilities":["hit","timing","accuracy","bpm","progress","xperfect","hitmargins","mapmeta",
+                 "timeline","coop","checkpoint","paused","fps","timingwindows","kps","pseudobpm",
+                 "checkpointtiles","perfectcombo"],
+ "difficulty":"Strict","hitMarginNames":["TooEarly","VeryEarly",…,"FailedFloor"],
+ "hitMarginWeights":[…],"hitMarginXScores":[…],
  "modMessages":464,"modConnects":3,"modDisconnects":1,"rejectedMessages":1,
  "lastModMessageAgoSeconds":0.02,"unknownMessageTypes":{},
  "clientCount":2,"eventQueueSize":0,"maxClientQueueSize":0,
  "droppedEvents":7,"clientDroppedEvents":0,"serializer":"orjson","stateUpdates":812}
 ```
 
+- `capabilities` 是 **Mod 自己探测出来的**，不是固定列表：基础 5 项之外，游戏程序集里有什么能力
+  就追加什么（`timeline` / `coop` / `timingwindows` / `fps` …）。前端和插件应当逐项判断，
+  缺哪项就隐藏对应显示，而不是假设一定有；
+- `hitMarginNames` 的下标就是判定枚举值，用来把状态帧里的 `hitMargins` 计数翻译成判定名；
 - `droppedEvents` 是 **Mod 上报**的丢包（Mod 队列满丢最旧）；
 - `clientDroppedEvents` 是 **Core 侧**因慢客户端丢的事件（每个客户端互不影响）。
 
@@ -135,30 +143,49 @@ Mod 的 `Settings.xml` 里 `ServerUrl` 默认就是 `ws://127.0.0.1:37125/ws/mod
 
 ### 4.2 Core → 插件（下行）
 
-状态帧按 `server.stateRate` 广播（默认 60Hz）：
+状态帧按 `server.stateRate` 广播（默认 60Hz），字段与 Mod 上行一致（Core 只做校验和补 `stale` / `updatedAt`）：
 
 ```json
 {"type":"state","version":1,"timestamp":1730000000.5,"data":{
   "connected":true,"stale":false,"gameState":"playing","droppedEvents":0,
-  "auto":false,"practice":false,"noFail":false,
-  "map":{"songName":"","songAuthor":"","difficulty":0},
-  "play":{"seq":421,"progress":0.5231,"combo":128,"maxCombo":200,"accuracy":0.9912,
-          "xAccuracy":0.98,"bpm":180.0,"timingMs":-1.37,"misses":2},
-  "playerSeq":[421,0,0,0,0,0,0,0],"updatedAt":1730000000.4}}
+  "auto":false,"practice":false,"noFail":false,"paused":false,"fps":143.7,"playerCount":2,
+  "map":{"id":"abcdef01…","songName":"","artist":"","songAuthor":"","author":"谱师","difficulty":2,
+         "difficultyName":"Strict","floorCount":1024,"bpm":180,"pitch":1,"duration":214.3,"checkpointTiles":37},
+  "timeline":{"musicTime":12.5,"musicLength":214.3,"mapTime":11.25,"mapLength":214.3},
+  "timingWindows":{"counted":40,"perfect":45,"pure":30,"xPerfect":12.5,"denom":540,
+                  "degrees":[40,45,30,12.5]},
+  "play":{"seq":421,"progress":0.5231,"combo":128,"maxCombo":200,"perfectCombo":true,
+          "accuracy":0.9912,"xAccuracy":0.98,
+          "bpm":180,"tileBpm":360,"currentBpm":358.2,"pseudoBpm":358.2,"kps":6.2,"timingMs":-1.37,
+          "misses":2,"judged":513,"remaining":688,"xScore":902,"maxXScore":2056,"xScorePotential":2276,
+          "deaths":4,"checkpoints":3,"purePerfect":false,"startSeq":0,"startProgress":0,"marginScale":1},
+  "players":[{"player":0,"seq":421,"progress":0.523,"combo":128,"maxCombo":200,"perfectCombo":true,
+              "accuracy":0.9912,"xAccuracy":0.98,"xScore":902,"maxXScore":2056,"deaths":4,"judged":513,
+              "remaining":688,"purePerfect":false,"auto":false,"color":"4DCCFF","marginScale":1,
+              "hitMargins":[3,0,0,0,240,0,0,0,0,5,0,0,0,2,0,0]}],
+  "playerSeq":[421,498,0,0,0,0,0,0],"updatedAt":1730000000.4}}
 ```
+
+- 新字段**全部可选**，`additionalProperties` 允许额外键，所以老版本 Mod 的数据照样通过校验；
+- `timingWindows` 可能是 `null`（分母算不出时），插件要判空；
+- `hitMargins` 的下标含义由 `hello.hitMarginNames` 给出（见 §4.4），Core 与插件都不写死数值；
+- `combo` 是**完美连击**（只有中心完美判定 +1，中旋 / Auto 不变，其余清零），
+  `perfectCombo` 表示本局至今没被非完美判定打断过 —— 前端据此把标题在「完美 / 连击」之间切换，
+  数值颜色用 SDK 的 `comboColor()` 按完美率算（复刻 JipperOverlayer 的红→黄→绿渐变）。
 
 事件帧逐条推送，低延迟优先：
 
 ```json
 {"type":"hit","version":1,"id":182734,"timestamp":1730000000.789,"data":{
-  "player":0,"seq":421,"judgement":"PerfectPlus","timingMs":-1.37,"combo":128,"miss":false}}
+  "player":0,"seq":421,"judgement":"PerfectPlus","timingMs":-1.37,"combo":128,"miss":false,
+  "perfect":true,"perfectCombo":true,"xScore":902,"judged":513,"purePerfect":false}}
 ```
 
 插件客户端连上后**先发订阅**：
 
 ```json
 {"type":"subscribe","version":1,"timestamp":1730000000.5,
- "data":{"state":true,"events":["hit","game.start","death"]}}
+ "data":{"state":true,"events":["hit","game.start","death","checkpoint"]}}
 ```
 
 - `state` 为 `true` 才收状态帧；`events` 里写 `"*"` 表示全部事件；
@@ -168,8 +195,23 @@ Mod 的 `Settings.xml` 里 `ServerUrl` 默认就是 `ws://127.0.0.1:37125/ws/mod
 
 ### 4.3 断线与恢复
 
-Mod 断开：`connected=false` + `stale=true`，保留最后状态等重连（§17）。
+Mod 断开：`connected=false` + `stale=true`，保留最后状态等重连。
 Mod 自动重连后恢复正常推送；插件侧断线由 SDK 按 250ms / 500ms / 1s / 2s 退避重连。
+
+Core 用 uvicorn 默认的 `ws_ping_interval=20s` / `ws_ping_timeout=20s` 保活，所以客户端必须回 PONG。
+Mod 侧为此保留了接收循环（`Transport.ReceiveLoopAsync`）：早期版本只发不收，连接会**每 40 秒**
+被 Core 断开一次（20s 发 ping + 20s 未收到 pong），日志里表现为固定周期的「已断开 / 已连接」。
+如果又看到周期性闪断，先查这一条。
+
+### 4.4 能力协商（hello）
+
+Mod 的 `hello` 会进 Core 的 `/api/health`，Core 还会**保留最后一份 `hello` 并原样转发**给插件：
+
+- 插件比 Mod 晚连上是常态（刷新页面就是），所以 Core 在插件订阅后
+  **补发最后一份 `hello`**，插件不必等 Mod 重连；
+- 插件用 `client.on('hello', …)` 拿 `capabilities` / `hitMarginNames` 等元数据，
+  再决定显示哪些面板（示例 Overlay 的「能力」一行就是这么来的）；
+- Mod 从未连过时不补发，插件按「没有能力信息」处理即可。
 
 ## 5. 插件开发
 
@@ -201,15 +243,34 @@ manifest 字段：
 <script src="/sdk/protocol.js"></script>
 <script src="/sdk/tadofai-client.js"></script>
 <script>
-  const client = new TadofaiClient({ state: true, events: ["hit", "game.end"] });
-  client.on("state", state => { /* 进度、Combo、准确率、BPM ... */ });
+  const client = new TadofaiClient({ state: true, events: ["hit", "game.end", "checkpoint"] });
+  client.on("hello", hello => { /* capabilities、hitMarginNames：决定显示哪些面板 */ });
+  client.on("state", state => { /* 进度、Combo、准确率、BPM、players[] 逐玩家数据 ... */ });
   client.on("hit", hit => { /* 判定 + timing 动画 */ });
+  client.on("checkpoint", evt => { /* 过检查点 */ });
   client.on("connection", connected => document.body.classList.toggle("offline", !connected));
 </script>
 ```
 
 SDK 负责自动重连、状态缓存、事件订阅、协议版本与错误处理；
 插件不能直接读文件系统，只能通过 Core 提供的这些数据。
+
+`protocol.js` 里还有一批纯函数，避免每个插件各写一套格式化和判定名映射：
+
+| 函数 | 作用 |
+| --- | --- |
+| `capabilities(hello)` / `hasCapability(hello, name)` | 读能力位，缺能力时隐藏面板 |
+| `judgementLabel(name)` / `judgementClass(name)` | 判定枚举名 → 中文标签 / CSS 类（跨版本统一） |
+| `expandHitMargins(names, counts)` | `hitMargins` 计数数组 → `[{name, label, class, count}]` |
+| `difficultyLabel(name, value)` / `gameStateLabel(value)` | 难度 / 状态的中文标签 |
+| `formatClock(seconds)` / `formatClockMs` / `formatPercent` / `formatTiming` / `formatInt` | 时间轴、百分比、Timing 文本 |
+| `playerColor(hex)` | 逐玩家颜色（`players[].color`）→ CSS 颜色 |
+| `comboTitle(perfectCombo)` | Combo 标题：`true` → 「完美」，`false` → 「连击」 |
+| `comboColor({combo, seq, startSeq, too, purePerfect, max})` | Combo 数值颜色（纯完美金黄；否则按完美率红→黄→绿） |
+| `tooJudgementCount(counts, names)` | 从判定直方图数 TooEarly + TooLate，喂给 `comboColor` 的 `too` |
+
+示例 Overlay `plugins/example-overlay/` 用到了全部新字段（判定分布直方图、X-Score 潜力、
+逐玩家面板、时间轴、判定窗、检查点提示），可以直接当模板抄。
 
 扫描规则：任何插件坏掉（缺 manifest / 字段缺失 / id 非法 / 入口不存在 / apiVersion 过高）
 只会被标记 `status=error` 并附上原因，不会影响 Core 和其他插件；

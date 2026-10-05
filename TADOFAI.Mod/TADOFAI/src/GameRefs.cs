@@ -14,7 +14,7 @@ namespace TADOFAI.Mod
     /// <summary>
     /// 集中读取游戏对象。所有访问都做空引用保护，绑定失败只记录告警，不让 Mod 崩溃。
     /// </summary>
-    public static class GameRefs
+    public static partial class GameRefs
     {
         public static scrController Controller
         {
@@ -243,11 +243,24 @@ namespace TADOFAI.Mod
 
             try
             {
-                scrConductor conductor = Conductor;
-                object song = conductor != null ? (object)conductor.song : null;
+                // 真正的谱面元信息在 scnGame.instance.levelData（ADOFAI.LevelData）上：
+                //   song   = 曲名        artist = 曲师        author = 谱师
+                // 早期版本这里读的是 conductor.song（AudioSource），上面没有 songName/author，
+                // 所以曲名与曲师其实一直落到静态回退分支、经常是空的，这里改成优先读 levelData。
+                object levelData = GameRefs.LevelData;
+                meta.SongAuthor = Reflect.GetString(levelData, "artist", null);
+                if (string.IsNullOrEmpty(meta.SongAuthor))
+                    meta.SongAuthor = Reflect.GetString(levelData, "author", null);
 
-                meta.SongName = ReadFirstString(song, "songName", "levelName", "songTitle", "name");
-                meta.SongAuthor = ReadFirstString(song, "author", "artist", "songAuthor");
+                meta.SongName = Reflect.GetString(levelData, "song", null);
+                if (string.IsNullOrEmpty(meta.SongName))
+                {
+                    scrConductor conductor = Conductor;
+                    object song = conductor != null ? (object)conductor.song : null;
+                    meta.SongName = ReadFirstString(song, "songName", "levelName", "songTitle", "name");
+                }
+
+                meta.Difficulty = Reflect.GetInt(levelData, "difficulty", -1);
             }
             catch (Exception ex)
             {
@@ -260,7 +273,13 @@ namespace TADOFAI.Mod
             if (string.IsNullOrEmpty(meta.SongAuthor))
                 meta.SongAuthor = ReadFirstStaticString("GCNS.songAuthor", "ADOBase.songAuthor", "scnGame.songAuthor");
 
-            meta.Difficulty = ReadFirstStaticInt("GCNS.difficulty", "ADOBase.difficulty", "scnGame.difficulty");
+            if (meta.Difficulty < 0)
+            {
+                // GCS.difficulty 是 Difficulty 枚举（装箱后不是 int），必须走 Convert，
+                // 原来用 "value is int" 判断导致 difficulty 永远上报 0。
+                meta.Difficulty = ReadFirstStaticInt("GCS.difficulty", "GCNS.difficulty",
+                    "ADOBase.difficulty", "scnGame.difficulty");
+            }
 
             if (meta.SongName == null) meta.SongName = string.Empty;
             if (meta.SongAuthor == null) meta.SongAuthor = string.Empty;
@@ -354,7 +373,9 @@ namespace TADOFAI.Mod
             for (int i = 0; i < typeDotMembers.Length; i++)
             {
                 object value = ReadStaticMember(typeDotMembers[i]);
-                if (value is int) return (int)value;
+                if (value == null) continue;
+                int converted = Reflect.ToInt(value, int.MinValue);
+                if (converted != int.MinValue) return converted;
             }
 
             return 0;

@@ -9,6 +9,17 @@ from typing import Any
 from .models import PROTOCOL_VERSION
 
 
+def _to_float(value: Any) -> float:
+    """把 Mod 上报的任意数值安全转成 float，失败给 0.0。"""
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if result != result or result in (float("inf"), float("-inf")):
+        return 0.0
+    return result
+
+
 @dataclass
 class HealthService:
     started_at: float = field(default_factory=time.time)
@@ -27,6 +38,11 @@ class HealthService:
     mod_version: str = ""
     game_version: str = ""
     capabilities: list[str] = field(default_factory=list)
+    #: 判定表：下标 = HitMargin 枚举值（版本间枚举不同，必须由 Mod 告知）
+    difficulty: str = ""
+    hit_margin_names: list[str] = field(default_factory=list)
+    hit_margin_weights: list[float] = field(default_factory=list)
+    hit_margin_x_scores: list[int] = field(default_factory=list)
 
     #: 未知消息类型统计，用来发现协议漂移
     unknown_types: Counter = field(default_factory=Counter)
@@ -58,6 +74,21 @@ class HealthService:
         capabilities = data.get("capabilities")
         self.capabilities = [str(item)[:64] for item in capabilities][:32] if isinstance(capabilities, list) else []
 
+        self.difficulty = str(data.get("difficulty", ""))[:64]
+
+        names = data.get("hitMarginNames")
+        self.hit_margin_names = [str(item)[:64] for item in names][:64] if isinstance(names, list) else []
+
+        weights = data.get("hitMarginWeights")
+        self.hit_margin_weights = (
+            [_to_float(item) for item in weights][:64] if isinstance(weights, list) else []
+        )
+
+        scores = data.get("hitMarginXScores")
+        self.hit_margin_x_scores = (
+            [int(_to_float(item)) for item in scores][:64] if isinstance(scores, list) else []
+        )
+
     @property
     def uptime(self) -> float:
         return max(0.0, time.time() - self.started_at)
@@ -78,6 +109,10 @@ class HealthService:
             "modVersion": self.mod_version,
             "gameVersion": self.game_version,
             "capabilities": list(self.capabilities),
+            "difficulty": self.difficulty,
+            "hitMarginNames": list(self.hit_margin_names),
+            "hitMarginWeights": list(self.hit_margin_weights),
+            "hitMarginXScores": list(self.hit_margin_x_scores),
             "modMessages": self.mod_messages,
             "modConnects": self.mod_connects,
             "modDisconnects": self.mod_disconnects,

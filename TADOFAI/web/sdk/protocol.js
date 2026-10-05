@@ -176,6 +176,280 @@
     return typeof state === 'string' && state ? state : '--';
   }
 
+  /* ---------------- 能力位 ---------------- */
+
+  /**
+   * 从 hello 帧（或 client.hello）取出能力位数组。
+   * 前端必须先看这个再决定渲染哪些块：字段出现在列表里就保证可读。
+   */
+  function capabilities(source) {
+    var list = source;
+    if (source && typeof source === 'object') list = source.capabilities;
+    if (!Array.isArray(list)) return [];
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      if (typeof list[i] === 'string' && list[i]) out.push(list[i]);
+    }
+    return out;
+  }
+
+  function hasCapability(source, name) {
+    var list = Array.isArray(source) ? source : capabilities(source);
+    return list.indexOf(name) >= 0;
+  }
+
+  /* ---------------- 判定表 ---------------- */
+
+  /**
+   * 判定名 → 中文标签。
+   * 名字来自 hello.hitMarginNames（各版本枚举不同），这里只做显示翻译；
+   * 认不出来的名字原样返回，绝不丢弃。
+   */
+  var JUDGEMENT_LABELS = {
+    TooEarly: '太早',
+    VeryEarly: '很早',
+    EarlyPerfect: '稍早',
+    Perfect: '完美',
+    PerfectMinus: '完美(-)',
+    XPerfect: '完美(X)',
+    PerfectPlus: '完美(+)',
+    LatePerfect: '稍晚',
+    VeryLate: '很晚',
+    TooLate: '太晚',
+    Multipress: '多按',
+    OverPress: '连按',
+    FailMiss: '失误',
+    FailOverload: '过载',
+    FailedFloor: '失败',
+    Auto: '自动',
+    Midspin: '中旋'
+  };
+
+  /** 判定名 → CSS class 后缀，供 overlay 上色 */
+  var JUDGEMENT_CLASSES = {
+    TooEarly: 'j-tooearly',
+    VeryEarly: 'j-veryearly',
+    EarlyPerfect: 'j-early',
+    Perfect: 'j-perfect',
+    PerfectMinus: 'j-perfect',
+    XPerfect: 'j-xperfect',
+    PerfectPlus: 'j-perfect',
+    LatePerfect: 'j-late',
+    VeryLate: 'j-verylate',
+    TooLate: 'j-toolate',
+    Multipress: 'j-multi',
+    OverPress: 'j-multi',
+    FailMiss: 'j-fail',
+    FailOverload: 'j-fail',
+    FailedFloor: 'j-fail',
+    Auto: 'j-auto',
+    Midspin: 'j-midspin'
+  };
+
+  function judgementLabel(name) {
+    var key = str(name);
+    if (!key) return '--';
+    return JUDGEMENT_LABELS[key] || key;
+  }
+
+  function judgementClass(name) {
+    var key = str(name);
+    if (!key) return '';
+    return JUDGEMENT_CLASSES[key] || '';
+  }
+
+  /**
+   * 把 state.players[].hitMargins（下标数组）展开成 [{index, name, count}]。
+   * names 来自 hello.hitMarginNames；names 缺失时 name 为空串，仍然保留下标。
+   * onlyNonZero=true（默认）时跳过计数为 0 的项。
+   */
+  function expandHitMargins(counts, names, onlyNonZero) {
+    var out = [];
+    if (!Array.isArray(counts)) return out;
+    var skipZero = onlyNonZero !== false;
+    for (var i = 0; i < counts.length; i++) {
+      var count = num(counts[i], 0);
+      if (skipZero && count <= 0) continue;
+      out.push({
+        index: i,
+        name: Array.isArray(names) && typeof names[i] === 'string' ? names[i] : '',
+        count: Math.round(count)
+      });
+    }
+    return out;
+  }
+
+  /* ---------------- 关卡 / 时间轴 ---------------- */
+
+  var DIFFICULTY_LABELS = ['简单', '普通', '困难'];
+
+  /** 难度：优先用 name（Lenient/Normal/Strict），否则按下标映射，再否则返回原值 */
+  function difficultyLabel(name, index) {
+    var key = str(name);
+    if (key === 'Lenient') return DIFFICULTY_LABELS[0];
+    if (key === 'Normal') return DIFFICULTY_LABELS[1];
+    if (key === 'Strict') return DIFFICULTY_LABELS[2];
+    if (key) return key;
+    var i = num(index, NaN);
+    if (i === i && DIFFICULTY_LABELS[i]) return DIFFICULTY_LABELS[i];
+    return '--';
+  }
+
+  /** 秒 → m:ss（超过一小时给 h:mm:ss）；非法值返回 '--' */
+  function formatClock(seconds, showHours) {
+    var n = num(seconds, NaN);
+    if (n !== n) return '--';
+    var negative = n < 0;
+    n = Math.abs(n);
+    var total = Math.floor(n);
+    var hours = Math.floor(total / 3600);
+    var minutes = Math.floor((total % 3600) / 60);
+    var secs = total % 60;
+    var text;
+    if (showHours || hours > 0) {
+      text = hours + ':' + pad2(minutes) + ':' + pad2(secs);
+    } else {
+      text = minutes + ':' + pad2(secs);
+    }
+    return (negative ? '-' : '') + text;
+  }
+
+  /** 秒 → "1:23.45"，用于毫秒级显示 */
+  function formatClockMs(seconds) {
+    var n = num(seconds, NaN);
+    if (n !== n) return '--';
+    var negative = n < 0;
+    n = Math.abs(n);
+    var total = Math.floor(n);
+    var minutes = Math.floor(total / 60);
+    var secs = total % 60;
+    var fraction = Math.floor((n - total) * 100);
+    return (negative ? '-' : '') + minutes + ':' + pad2(secs) + '.' + pad2(fraction);
+  }
+
+  function pad2(value) {
+    return value < 10 ? '0' + value : String(value);
+  }
+
+  /** "1 / 1200" 形式的整数比；上限非法时只显示分子 */
+  function formatRatio(value, max) {
+    var v = num(value, NaN);
+    if (v !== v) return '--';
+    var a = formatInt(value);
+    var b = num(max, NaN);
+    if (b !== b || b <= 0) return a;
+    return a + ' / ' + formatInt(max);
+  }
+
+  /** 玩家颜色 RRGGBB → #RRGGBB；已经是 # 开头则原样返回；空值返回 '' */
+  function playerColor(value) {
+    var raw = str(value);
+    if (!raw) return '';
+    if (raw.charAt(0) === '#') return raw;
+    if (/^[0-9a-fA-F]{6}$/.test(raw)) return '#' + raw;
+    return '';
+  }
+
+  /** 毫秒判定窗 → "±45.0ms" */
+  function formatWindow(ms, digits) {
+    var n = num(ms, NaN);
+    if (n !== n || n <= 0) return '--';
+    return '±' + n.toFixed(digits == null ? 1 : digits) + 'ms';
+  }
+
+  /* ---------------- 完美连击（Combo）---------------- */
+  // 口径与 JipperOverlayer 一致：Combo 只统计「中心完美」判定，
+  // 标题在「完美」与「连击」之间切换，颜色按完美率走红→黄→绿渐变。
+
+  var COMBO_TITLE = '完美';
+  var COMBO_TITLE_ALT = '连击';
+
+  /** JipperOverlayer ColorConfig.JCombo：(0,红) (0.2,黄) (1,绿) */
+  var COMBO_STOPS = [
+    [0, [255, 0, 0]],
+    [0.2, [252, 255, 77]],
+    [1, [95, 255, 79]]
+  ];
+
+  /** JipperOverlayer ColorConfig.Combo：淡紫 → 紫（单色基础模式） */
+  var COMBO_BASE_STOPS = [
+    [0, [223, 181, 255]],
+    [1, [183, 89, 255]]
+  ];
+
+  /** JipperOverlayer ColorConfig.JStatePerfectPlay：金黄 */
+  var PERFECT_PLAY_GOLD = [255, 218, 0];
+
+  function stopsToRgb(stops, t) {
+    var value = num(t, 0);
+    if (value <= 0) value = 0;
+    if (value >= 1) value = 1;
+
+    for (var i = 0; i < stops.length - 1; i++) {
+      var a = stops[i];
+      var b = stops[i + 1];
+      if (value >= a[0] && value <= b[0]) {
+        var span = b[0] - a[0];
+        var k = span <= 0 ? 0 : (value - a[0]) / span;
+        return [
+          Math.round(a[1][0] + (b[1][0] - a[1][0]) * k),
+          Math.round(a[1][1] + (b[1][1] - a[1][1]) * k),
+          Math.round(a[1][2] + (b[1][2] - a[1][2]) * k)
+        ];
+      }
+    }
+    return stops[stops.length - 1][1];
+  }
+
+  function rgbToHex(rgb) {
+    function part(v) {
+      var s = Math.max(0, Math.min(255, Math.round(v))).toString(16);
+      return s.length < 2 ? '0' + s : s;
+    }
+    return '#' + part(rgb[0]) + part(rgb[1]) + part(rgb[2]);
+  }
+
+  /** Combo 标题：完美连击 → 「完美」，本局出现过非完美判定 → 「连击」 */
+  function comboTitle(perfectCombo) {
+    return bool(perfectCombo, true) ? COMBO_TITLE : COMBO_TITLE_ALT;
+  }
+
+  /**
+   * Combo 数值颜色，复刻 JipperOverlayer：
+   *  - 纯完美（purePerfect）           → 金黄
+   *  - 有 seq/startSeq（扩展模式）     → t = combo / (seq - startSeq + too + 1) * 2，红→黄→绿
+   *  - 否则（基础模式）                → t = combo / max，淡紫→紫
+   * too = TooEarly + TooLate 的次数（可传 undefined，按 0 处理）。
+   */
+  function comboColor(options) {
+    var opts = options || {};
+    if (bool(opts.purePerfect, false)) return rgbToHex(PERFECT_PLAY_GOLD);
+
+    var combo = num(opts.combo, 0);
+    var seq = num(opts.seq, NaN);
+    var startSeq = num(opts.startSeq, NaN);
+
+    if (seq === seq && startSeq === startSeq) {
+      var denominator = seq - startSeq + num(opts.too, 0) + 1;
+      if (denominator > 0) return rgbToHex(stopsToRgb(COMBO_STOPS, (combo / denominator) * 2));
+    }
+
+    var max = num(opts.max, 1000);
+    if (max <= 0) max = 1000;
+    return rgbToHex(stopsToRgb(COMBO_BASE_STOPS, Math.min(combo, max) / max));
+  }
+
+  /** 从判定直方图里数 TooEarly + TooLate（comboColor 的 too 参数）。60Hz 调用，故不分配对象 */
+  function tooJudgementCount(counts, names) {
+    if (!Array.isArray(counts) || !Array.isArray(names)) return 0;
+    var total = 0;
+    var len = Math.min(counts.length, names.length);
+    for (var i = 0; i < len; i++) {
+      if (names[i] === 'TooEarly' || names[i] === 'TooLate') total += Math.round(num(counts[i], 0));
+    }
+    return total;
+  }
+
   global.TadofaiProtocol = {
     PROTOCOL_VERSION: PROTOCOL_VERSION,
 
@@ -210,6 +484,26 @@
     formatTiming: formatTiming,
     formatNumber: formatNumber,
     formatInt: formatInt,
-    gameStateLabel: gameStateLabel
+    gameStateLabel: gameStateLabel,
+
+    capabilities: capabilities,
+    hasCapability: hasCapability,
+
+    judgementLabel: judgementLabel,
+    judgementClass: judgementClass,
+    expandHitMargins: expandHitMargins,
+
+    difficultyLabel: difficultyLabel,
+    formatClock: formatClock,
+    formatClockMs: formatClockMs,
+    formatRatio: formatRatio,
+    playerColor: playerColor,
+    formatWindow: formatWindow,
+
+    COMBO_TITLE: COMBO_TITLE,
+    COMBO_TITLE_ALT: COMBO_TITLE_ALT,
+    comboTitle: comboTitle,
+    comboColor: comboColor,
+    tooJudgementCount: tooJudgementCount
   };
 })(typeof window !== 'undefined' ? window : this);
